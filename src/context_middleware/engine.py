@@ -9,7 +9,7 @@ from .compressor import SelectiveSentenceCompressor
 from .config import MiddlewareConfig
 from .models import CompressionResult
 from .preprocessor import MarkItDownPreprocessor
-from .reorderer import UShapeReorderer
+from .reorderer import ContextReorderer
 from .retriever import ONNXBiEncoderRetriever
 
 
@@ -19,7 +19,7 @@ class CPUMiddlewareEngine:
         preprocessor: MarkItDownPreprocessor,
         retriever: ONNXBiEncoderRetriever,
         compressor: SelectiveSentenceCompressor,
-        reorderer: UShapeReorderer,
+        reorderer: ContextReorderer,
         config: MiddlewareConfig | None = None,
     ) -> None:
         self.preprocessor = preprocessor

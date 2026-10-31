@@ -5,19 +5,20 @@ from .config import MiddlewareConfig
 from .engine import CPUMiddlewareEngine
 from .models import CompressionResult, Embedding, TextSegment
 from .preprocessor import MarkItDownPreprocessor
-from .reorderer import UShapeReorderer
+from .reorderer import ContextReorderer, ReorderStrategy
 from .retriever import BGE_QUERY_PREFIX, ONNXBiEncoderRetriever, Pooling
 
 __all__ = [
     "BGE_QUERY_PREFIX",
     "CPUMiddlewareEngine",
     "CompressionResult",
+    "ContextReorderer",
     "Embedding",
     "MarkItDownPreprocessor",
     "MiddlewareConfig",
     "ONNXBiEncoderRetriever",
     "Pooling",
+    "ReorderStrategy",
     "SelectiveSentenceCompressor",
     "TextSegment",
-    "UShapeReorderer",
 ]
