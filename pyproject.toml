@@ -24,12 +24,12 @@ dev = ["pytest>=8", "mypy>=1.10"]
 packages = ["src/context_middleware"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "evaluation"]
 
 [[tool.mypy.overrides]]
 module = ["onnxruntime.*", "markitdown.*", "pysbd.*"]

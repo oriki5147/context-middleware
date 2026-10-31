@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from .compressor import SelectiveSentenceCompressor
@@ -99,21 +99,27 @@ class CPUMiddlewareEngine:
         return CompressionResult.from_counts(prompt, original, self.count_tokens(prompt))
 
     def _fit_budget(self, ranked: list[TextSegment]) -> list[TextSegment]:
-        """Keep best-first sentences whose tokens fit ``max_context_tokens``.
+        costs = [self.count_tokens(s.content) for s in ranked]
+        kept = fit_budget(costs, self.config.max_context_tokens, self.config.budget_strategy)
+        return [ranked[i] for i in kept]
 
-        On the first sentence that does not fit, ``budget_strategy`` decides:
-        FILL skips it and keeps trying lower-ranked ones, STOP ends there.
-        Separators are not counted.
-        """
-        budget = self.config.max_context_tokens
-        if budget is None:
-            return ranked
-        kept: list[TextSegment] = []
-        for sentence in ranked:
-            cost = self.count_tokens(sentence.content)
-            if cost <= budget:
-                kept.append(sentence)
-                budget -= cost
-            elif self.config.budget_strategy is BudgetStrategy.STOP:
-                break
-        return kept
+
+def fit_budget(
+    costs: Sequence[int], budget: int | None, strategy: BudgetStrategy = BudgetStrategy.FILL
+) -> list[int]:
+    """Indices of best-first items (``costs`` in rank order) that fit ``budget``.
+
+    On the first item that does not fit, ``strategy`` decides: FILL skips it
+    and keeps trying lower-ranked ones, STOP ends there. Separators are not
+    counted. A pure function so the evaluation harness sweeps the same rule.
+    """
+    if budget is None:
+        return list(range(len(costs)))
+    kept: list[int] = []
+    for i, cost in enumerate(costs):
+        if cost <= budget:
+            kept.append(i)
+            budget -= cost
+        elif strategy is BudgetStrategy.STOP:
+            break
+    return kept

@@ -12,3 +12,6 @@ models/
 
 # Reference papers: kept locally, not committed for now.
 *.pdf
+
+# Downloaded evaluation data and cached results.
+data/

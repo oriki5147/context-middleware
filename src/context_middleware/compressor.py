@@ -21,6 +21,28 @@ from .models import Embedding, TextSegment
 from .sentences import SentenceSplitter, pysbd_splitter, sentence_spans
 
 
+def select_sentences(
+    scores: NDArray[np.float32],
+    sentence_threshold: float,
+    empty_threshold: float,
+    min_sentences: int = 1,
+    max_sentences: int | None = None,
+) -> list[int]:
+    """Indices of kept sentences, best first (ties keep input order).
+
+    Pure function so the evaluation harness sweeps exactly the production rule.
+    """
+    if len(scores) == 0:
+        return []
+    order = np.argsort(-scores, kind="stable")
+    if scores[order[0]] <= empty_threshold:
+        return []
+    keep = max(int((scores >= sentence_threshold).sum()), min_sentences)
+    if max_sentences is not None:
+        keep = min(keep, max_sentences)
+    return [int(i) for i in order[:keep]]
+
+
 class SegmentEncoder(Protocol):
     """What the compressor needs from ``ONNXBiEncoderRetriever``."""
 
@@ -66,16 +88,15 @@ class SelectiveSentenceCompressor:
         sentences = self.split(chunks)
         if not sentences:
             return []
-
         scores = self.encoder.embed_segments(sentences) @ query_embedding
-        order = np.argsort(-scores, kind="stable")
-        if scores[order[0]] <= self.empty_threshold:
-            return []
-
-        keep = max(int((scores >= self.sentence_threshold).sum()), self.min_sentences)
-        if self.max_sentences is not None:
-            keep = min(keep, self.max_sentences)
-        return [replace(sentences[i], score=float(scores[i])) for i in order[:keep]]
+        kept = select_sentences(
+            scores,
+            self.sentence_threshold,
+            self.empty_threshold,
+            self.min_sentences,
+            self.max_sentences,
+        )
+        return [replace(sentences[i], score=float(scores[i])) for i in kept]
 
     def split(self, chunks: Sequence[TextSegment]) -> list[TextSegment]:
         """Split chunks into sentences, dropping repeats from chunk overlap.
