@@ -178,11 +178,15 @@ class ONNXBiEncoderRetriever:
 
     # ----------------------------------------------------------------- indexing
 
+    def embed_segments(self, segments: Sequence[TextSegment]) -> NDArray[np.float32]:
+        """Embed segments as passages: title-prefixed when they carry a title."""
+        return self.encode([_passage_text(s) for s in segments])
+
     def add(self, segments: Sequence[TextSegment]) -> None:
         """Embed ``segments`` and append them to the in-memory index."""
         if not segments:
             return
-        embeddings = self.encode([_passage_text(s) for s in segments])
+        embeddings = self.embed_segments(segments)
         self._matrix = embeddings if self._matrix is None else np.vstack([self._matrix, embeddings])
         self._segments.extend(segments)
 

@@ -12,18 +12,14 @@ Markdown.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple, Protocol
 
 from .models import TextSegment
+from .sentences import SentenceSplitter, pysbd_splitter, sentence_spans
 
 _H1 = re.compile(r"^#\s+(.+?)\s*#*\s*$", re.MULTILINE)
-# A paragraph is a run of text without a blank line.
-_PARAGRAPH = re.compile(r"(?:[^\n]|\n(?![ \t]*\n))+")
-
-# Splits a paragraph into sentences; each must appear verbatim, in order, in it.
-SentenceSplitter = Callable[[str], Sequence[str]]
 
 
 class OffsetEncodingLike(Protocol):
@@ -43,18 +39,6 @@ class _Unit(NamedTuple):
     start: int
     end: int
     tokens: int
-
-
-def pysbd_splitter() -> SentenceSplitter:
-    import pysbd
-
-    segmenter = pysbd.Segmenter(language="en", clean=False)
-
-    def split(paragraph: str) -> Sequence[str]:
-        sentences: list[str] = segmenter.segment(paragraph)
-        return sentences
-
-    return split
 
 
 class MarkItDownPreprocessor:
@@ -122,7 +106,9 @@ class MarkItDownPreprocessor:
         offsets = self._tokenizer.encode(text, add_special_tokens=False).offsets
         units: list[_Unit] = []
         tok = 0  # first token not yet assigned to a unit
-        for start, end in self._sentence_spans(text):
+        # Every token is assigned to a unit, so text the splitter dropped
+        # mid-paragraph is absorbed by the following sentence's unit.
+        for _, end in sentence_spans(text, self._split):
             first = tok
             while tok < len(offsets) and offsets[tok][0] < end:
                 tok += 1
@@ -131,26 +117,6 @@ class MarkItDownPreprocessor:
             for a, b in _word_aligned_pieces(offsets, first, tok, self.chunk_size_tokens):
                 units.append(_Unit(offsets[a][0], offsets[b - 1][1], b - a))
         return units
-
-    def _sentence_spans(self, text: str) -> list[tuple[int, int]]:
-        spans: list[tuple[int, int]] = []
-        for paragraph in _PARAGRAPH.finditer(text):
-            base, body = paragraph.start(), paragraph.group()
-            cursor = 0
-            for sentence in self._split(body):
-                stripped = sentence.strip()
-                found = body.find(stripped, cursor) if stripped else -1
-                if found < 0:
-                    continue
-                spans.append((base + found, base + found + len(stripped)))
-                cursor = found + len(stripped)
-            # Trailing text the splitter dropped or altered becomes its own span.
-            # (Dropped text mid-paragraph is absorbed by the next sentence's unit
-            # in _units, since every token is assigned to some unit.)
-            if tail := body[cursor:].strip():
-                found = body.find(tail, cursor)
-                spans.append((base + found, base + found + len(tail)))
-        return spans
 
     def _pack(self, units: Sequence[_Unit]) -> list[tuple[int, int]]:
         """Unit index ranges ``[first, last)``: greedy fill, whole-unit overlap."""
