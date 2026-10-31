@@ -47,6 +47,7 @@ class CPUMiddlewareEngine:
         pooling: Pooling = Pooling.CLS,
         normalize: bool = True,
         query_prefix: str = "",
+        intra_op_num_threads: int = 0,
         token_counter: TokenCounter | None = None,
     ) -> CPUMiddlewareEngine:
         """Build every phase from one config and one encoder directory."""
@@ -54,6 +55,7 @@ class CPUMiddlewareEngine:
         retriever = ONNXBiEncoderRetriever.from_pretrained(
             model_dir,
             model_file=model_file,
+            intra_op_num_threads=intra_op_num_threads,
             pooling=pooling,
             normalize=normalize,
             query_prefix=query_prefix,

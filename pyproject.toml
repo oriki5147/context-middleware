@@ -16,6 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 ingest = ["markitdown[all]>=0.1"]
+# Offline FP32 -> INT8 conversion only (context_middleware.quantization).
+quantize = ["onnx>=1.16"]
 dev = ["pytest>=8", "mypy>=1.10"]
 
 [tool.hatch.build.targets.wheel]
