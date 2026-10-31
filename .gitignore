@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+dist/
+*.egg-info/
+
+# Model weights are fetched/exported locally, never committed.
+models/
+*.onnx
+
+# Reference papers: kept locally, not committed for now.
+*.pdf
