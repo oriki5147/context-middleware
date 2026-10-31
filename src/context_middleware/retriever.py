@@ -195,7 +195,11 @@ class ONNXBiEncoderRetriever:
         self._matrix = None
 
     def retrieve(self, query: str, top_k: int = 10) -> list[TextSegment]:
-        """Return up to ``top_k`` segments ranked by inner product with ``query``.
+        """Return up to ``top_k`` segments ranked by inner product with ``query``."""
+        return self.search(self.encode_query(query), top_k)
+
+    def search(self, query_embedding: Embedding, top_k: int = 10) -> list[TextSegment]:
+        """Like ``retrieve``, for a query already embedded with ``encode_query``.
 
         Results are new ``TextSegment`` objects carrying ``score`` and their
         ``embedding``; the indexed segments are not mutated.
@@ -205,7 +209,7 @@ class ONNXBiEncoderRetriever:
         if self._matrix is None:
             return []
 
-        scores = self._matrix @ self.encode_query(query)
+        scores = self._matrix @ query_embedding
         k = min(top_k, len(scores))
         # O(n) partial selection, then sort only the k winners.
         top = np.argpartition(-scores, k - 1)[:k]

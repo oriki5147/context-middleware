@@ -95,6 +95,10 @@ class MarkItDownPreprocessor:
             for i, (first, last) in enumerate(self._pack(units))
         ]
 
+    def count_tokens(self, text: str) -> int:
+        """Encoder tokens in ``text`` (no special tokens, no truncation)."""
+        return len(self._tokenizer.encode(text, add_special_tokens=False).offsets)
+
     def process(self, path: str | Path) -> list[TextSegment]:
         markdown = self.convert(path)
         return self.chunk(markdown, source_doc=str(path), title=_title(markdown, Path(path)))

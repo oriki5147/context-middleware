@@ -25,7 +25,6 @@ class SegmentEncoder(Protocol):
     """What the compressor needs from ``ONNXBiEncoderRetriever``."""
 
     def embed_segments(self, segments: Sequence[TextSegment]) -> NDArray[np.float32]: ...
-    def encode_query(self, query: str) -> Embedding: ...
 
 
 class SelectiveSentenceCompressor:
@@ -51,8 +50,13 @@ class SelectiveSentenceCompressor:
         self.max_sentences = max_sentences
         self._split = sentence_splitter or pysbd_splitter()
 
-    def compress(self, query: str, chunks: Sequence[TextSegment]) -> list[TextSegment]:
+    def compress(
+        self, query_embedding: Embedding, chunks: Sequence[TextSegment]
+    ) -> list[TextSegment]:
         """Return kept sentences, best first, each carrying its ``score``.
+
+        ``query_embedding`` comes from the same encoder's ``encode_query``, so
+        the engine embeds the query once for both retrieval and compression.
 
         - If even the best sentence scores ``<= empty_threshold``, return ``[]``
           (selective augmentation: let the LLM answer from parametric knowledge).
@@ -63,7 +67,7 @@ class SelectiveSentenceCompressor:
         if not sentences:
             return []
 
-        scores = self.encoder.embed_segments(sentences) @ self.encoder.encode_query(query)
+        scores = self.encoder.embed_segments(sentences) @ query_embedding
         order = np.argsort(-scores, kind="stable")
         if scores[order[0]] <= self.empty_threshold:
             return []
