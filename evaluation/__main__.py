@@ -45,7 +45,7 @@ EMPTY_THRESHOLDS = {s: _GRIDS[s.rstrip("0123456789")][1] for s in sweep.SCORERS}
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["build", "report", "build-raw", "report-raw"])
+    parser.add_argument("command", choices=["build", "report", "build-raw", "report-raw", "experiments"])
     parser.add_argument("--split", choices=["dev", "test"], default="dev")
     parser.add_argument("--limit", type=int, default=None, help="answerable questions")
     parser.add_argument("--negatives", type=int, default=None, help="per negative kind")
@@ -67,6 +67,8 @@ def main() -> None:
         print(f"building raw material: {len(examples)} answerable + {len(negatives)} unanswerable ({args.split})")
         raw.save(raw.build(examples + negatives, MODEL, RERANKER), raw_cache)
         print(f"saved {raw_cache}")
+    elif args.command == "experiments":
+        run_experiments(raw.load(raw_cache), OUT / "results" / f"{name}_experiments")
     elif args.command == "report-raw":
         raws = raw.load(raw_cache)
         records = [candidates.QuestionRecord(r.qid, r.kind, {"64": raw.derive(r)}) for r in raws]
@@ -135,6 +137,42 @@ def report(records: Sequence[candidates.QuestionRecord], out: Path) -> None:
             if fits:
                 print(f"<={target:4.0%} ", end="")
                 _print_row(max(fits, key=lambda r: r.answer_kept))
+    print(f"\nCSV files in {out}")
+
+
+def run_experiments(raws: Sequence[raw.RawQuestion], out: Path) -> None:
+    from context_middleware import BGE_QUERY_PREFIX, ONNXBiEncoderRetriever
+
+    from . import experiments
+
+    encoder = ONNXBiEncoderRetriever.from_pretrained(
+        MODEL, query_prefix=BGE_QUERY_PREFIX, intra_op_num_threads=8
+    )
+    answerable = [r for r in raws if r.kind == "answerable"]
+    print(f"{len(answerable)} answerable questions\n")
+
+    print("== Scoring variants (production chunking, 1,200 retrieved tokens) ==")
+    rows = experiments.evaluate_variants(
+        answerable, experiments.standard_variants(answerable, encoder.encode_query)
+    )
+    print(
+        f"{'variant':26} {'ans.retr':>8} | {'bi r1':>6} {'bi r<=3':>7} | {'rr r1':>6} {'rr r<=3':>7} | "
+        f"{'bi k1':>6} {'bi k3':>6} {'rr k1':>6} {'rr k3':>6} | {'tok k3':>6}"
+    )
+    for v in rows:
+        print(
+            f"{v.variant:26} {v.answer_in_retrieved:8.1%} | {v.bi_rank1:6.1%} {v.bi_top3:7.1%} | "
+            f"{v.rerank_rank1:6.1%} {v.rerank_top3:7.1%} | {v.bi_kept_1:6.1%} {v.bi_kept_3:6.1%} "
+            f"{v.rerank_kept_1:6.1%} {v.rerank_kept_3:6.1%} | {v.tokens_3:6.1f}"
+        )
+    sweep.write_csv(rows, out / "variants.csv")
+
+    print("\n== Output expansion: best k sentences plus document neighbors ==")
+    expansion = experiments.evaluate_expansion(answerable, [1, 2, 3, 5], ["none", "prev", "next", "both"])
+    print(f"{'scorer':9} {'k':>2} {'window':6} {'ans.kept':>8} {'tokens':>7} {'kept%':>6}")
+    for e in expansion:
+        print(f"{e.scorer:9} {e.top_k:2d} {e.window:6} {e.answer_kept:8.1%} {e.mean_tokens:7.1f} {e.kept_fraction:6.1%}")
+    sweep.write_csv(expansion, out / "expansion.csv")
     print(f"\nCSV files in {out}")
 
 

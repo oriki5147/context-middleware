@@ -133,19 +133,44 @@ def derive(
     raw: RawQuestion,
     chunk_scores: NDArray[np.float32] | None = None,
     sentence_scores: NDArray[np.float32] | None = None,
+    rerank_scores: NDArray[np.float32] | None = None,
     retrieval_tokens: int = RETRIEVAL_TOKENS,
 ) -> Candidates:
     """Production pipeline from raw material: retrieve chunks up to a token
     budget, then the retrieved chunks' sentences become the candidates.
 
-    ``chunk_scores`` / ``sentence_scores`` override the dense inner products
-    (e.g. hybrid BM25 fusion); defaults reproduce production exactly.
+    ``chunk_scores`` / ``sentence_scores`` / ``rerank_scores`` (indexed like
+    the raw chunks / sentences) override the model scores, e.g. for hybrid
+    BM25 fusion; defaults reproduce production exactly.
     """
-    if chunk_scores is None:
-        chunk_scores = raw.chunk_embedding @ raw.query_embedding
     if sentence_scores is None:
         sentence_scores = raw.sent_embedding @ raw.query_embedding
+    if rerank_scores is None:
+        rerank_scores = raw.sent_rerank
+    idx, retrieved, used = candidate_indices(raw, chunk_scores, retrieval_tokens)
+    text = "\n\n".join(raw.chunk_text[c] for c in retrieved)
+    answerable = raw.kind == "answerable"
+    return Candidates(
+        original_tokens=used,
+        gold_retrieved=raw.gold_doc >= 0 and any(int(raw.chunk_doc[c]) == raw.gold_doc for c in retrieved),
+        answer_in_retrieved=answerable and contains_answer(text, raw.answers),
+        scores=sentence_scores[idx].astype(np.float32),
+        rerank_scores=rerank_scores[idx].astype(np.float32),
+        reader_scores=None,
+        tokens=raw.sent_tokens[idx],
+        has_answer=raw.sent_has_answer[idx],
+    )
 
+
+def candidate_indices(
+    raw: RawQuestion,
+    chunk_scores: NDArray[np.float32] | None = None,
+    retrieval_tokens: int = RETRIEVAL_TOKENS,
+) -> tuple[NDArray[np.int64], list[int], int]:
+    """Raw sentence indices of the candidates (compressor.split order), the
+    retrieved chunk indices (best first), and the retrieved token count."""
+    if chunk_scores is None:
+        chunk_scores = raw.chunk_embedding @ raw.query_embedding
     retrieved: list[int] = []
     used = 0
     for c in np.argsort(-chunk_scores, kind="stable"):
@@ -167,19 +192,7 @@ def derive(
         if key not in seen:
             seen.add(key)
             candidates.append(i)
-    idx = np.array(candidates, dtype=np.int64)
-    text = "\n\n".join(raw.chunk_text[c] for c in retrieved)
-    answerable = raw.kind == "answerable"
-    return Candidates(
-        original_tokens=used,
-        gold_retrieved=raw.gold_doc >= 0 and any(int(raw.chunk_doc[c]) == raw.gold_doc for c in retrieved),
-        answer_in_retrieved=answerable and contains_answer(text, raw.answers),
-        scores=sentence_scores[idx].astype(np.float32),
-        rerank_scores=raw.sent_rerank[idx],
-        reader_scores=None,
-        tokens=raw.sent_tokens[idx],
-        has_answer=raw.sent_has_answer[idx],
-    )
+    return np.array(candidates, dtype=np.int64), retrieved, used
 
 
 def save(raws: list[RawQuestion], path: Path) -> None:
