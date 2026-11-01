@@ -2,17 +2,22 @@
 
 Selection uses the production functions (``select_sentences``, ``fit_budget``),
 so a row here is exactly what the middleware would output with that config.
+Scorers are compared on identical candidates:
+  - "bi":        bi-encoder scores over all candidate sentences;
+  - "rerank<N>": cross-encoder scores over the bi-encoder's top-N shortlist
+                 (production ``rerank_top_n = N``).
 """
 
 from __future__ import annotations
 
 import csv
 import itertools
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
+from numpy.typing import NDArray
 
 from context_middleware import BudgetStrategy
 from context_middleware.compressor import select_sentences
@@ -21,6 +26,29 @@ from context_middleware.engine import fit_budget
 from .candidates import Candidates, QuestionRecord
 
 NO_EMPTY = float("-inf")  # disables the empty-context rule
+SCORERS = ("bi", "rerank10", "rerank20", "rerank30", "rerank50")
+NEGATIVE_KINDS = ("unrelated", "distractors")
+
+
+@dataclass(frozen=True, slots=True)
+class View:
+    """The candidate set one scorer selects from, with aligned arrays."""
+
+    scores: NDArray[np.float32]
+    tokens: NDArray[np.int32]
+    has_answer: NDArray[np.bool_]
+
+
+def view(c: Candidates, scorer: str) -> View:
+    if scorer == "bi":
+        return View(c.scores, c.tokens, c.has_answer)
+    top_n = int(scorer.removeprefix("rerank"))
+    # Same shortlist as production, kept in bi-encoder order so that ties in
+    # reranker scores break the same way select_sentences breaks them there.
+    shortlist = np.argsort(-c.scores, kind="stable")[:top_n]
+    if np.isnan(c.rerank_scores[shortlist]).any():
+        raise ValueError(f"{scorer} exceeds the cached rerank shortlist")
+    return View(c.rerank_scores[shortlist], c.tokens[shortlist], c.has_answer[shortlist])
 
 
 # ----------------------------------------------------------------- retrieval
@@ -29,12 +57,14 @@ NO_EMPTY = float("-inf")  # disables the empty-context rule
 @dataclass(frozen=True, slots=True)
 class RetrievalRow:
     chunk_config: str
+    scorer: str
     questions: int
-    gold_retrieved: float  # gold passage among the top-K chunks
+    gold_retrieved: float  # gold passage among the retrieved chunks
     answer_in_retrieved: float  # answer string reaches the compressor
+    answer_in_candidates: float  # ... and is among this scorer's candidates
     answer_rank_1: float  # best-scored candidate sentence contains the answer
     answer_rank_le_3: float
-    median_answer_rank: float  # among questions whose answer was retrieved
+    median_answer_rank: float  # among questions whose answer is a candidate
     median_candidates: float
     mean_original_tokens: float
 
@@ -42,30 +72,33 @@ class RetrievalRow:
 def retrieval_report(records: Sequence[QuestionRecord]) -> list[RetrievalRow]:
     rows = []
     answerable = [r for r in records if r.answerable]
-    for name in answerable[0].by_config:
+    for name, scorer in itertools.product(answerable[0].by_config, SCORERS):
         cands = [r.by_config[name] for r in answerable]
-        ranks = [_answer_rank(c) for c in cands]
+        views = [view(c, scorer) for c in cands]
+        ranks = [_answer_rank(v) for v in views]
         found = [r for r in ranks if r is not None]
         rows.append(
             RetrievalRow(
                 chunk_config=name,
+                scorer=scorer,
                 questions=len(cands),
                 gold_retrieved=_mean(c.gold_retrieved for c in cands),
                 answer_in_retrieved=_mean(c.answer_in_retrieved for c in cands),
+                answer_in_candidates=_mean(r is not None for r in ranks),
                 answer_rank_1=_mean(r == 1 for r in ranks),
                 answer_rank_le_3=_mean(r is not None and r <= 3 for r in ranks),
                 median_answer_rank=float(np.median(found)) if found else float("nan"),
-                median_candidates=float(np.median([len(c.scores) for c in cands])),
+                median_candidates=float(np.median([len(v.scores) for v in views])),
                 mean_original_tokens=_mean(c.original_tokens for c in cands),
             )
         )
     return rows
 
 
-def _answer_rank(c: Candidates) -> int | None:
+def _answer_rank(v: View) -> int | None:
     """1-based rank of the best-ranked answer-bearing sentence, or None."""
-    order = np.argsort(-c.scores, kind="stable")
-    hits = np.flatnonzero(c.has_answer[order])
+    order = np.argsort(-v.scores, kind="stable")
+    hits = np.flatnonzero(v.has_answer[order])
     return int(hits[0]) + 1 if len(hits) else None
 
 
@@ -75,35 +108,39 @@ def _answer_rank(c: Candidates) -> int | None:
 @dataclass(frozen=True, slots=True)
 class EmptyRow:
     chunk_config: str
+    scorer: str
     empty_threshold: float
     false_empty: float  # answerable questions wrongly given no context
-    true_empty: float  # unanswerable questions correctly given no context
+    true_empty_unrelated: float  # off-topic negatives correctly given no context
+    true_empty_distractors: float  # on-topic negatives correctly given no context
 
 
 def empty_report(
-    records: Sequence[QuestionRecord], thresholds: Iterable[float]
+    records: Sequence[QuestionRecord], thresholds: Mapping[str, Iterable[float]]
 ) -> list[EmptyRow]:
     rows = []
-    thresholds = list(thresholds)
-    for name in records[0].by_config:
+    for name, scorer in itertools.product(records[0].by_config, SCORERS):
         best = {
-            flag: np.array([_best(r.by_config[name]) for r in records if r.answerable is flag])
-            for flag in (True, False)
+            kind: np.array([_best(view(r.by_config[name], scorer)) for r in records if r.kind == kind])
+            for kind in ("answerable", *NEGATIVE_KINDS)
         }
-        for t in thresholds:
+        for t in thresholds[scorer]:
+            rate = {k: float((b <= t).mean()) if len(b) else float("nan") for k, b in best.items()}
             rows.append(
                 EmptyRow(
                     chunk_config=name,
+                    scorer=scorer,
                     empty_threshold=t,
-                    false_empty=float((best[True] <= t).mean()) if len(best[True]) else float("nan"),
-                    true_empty=float((best[False] <= t).mean()) if len(best[False]) else float("nan"),
+                    false_empty=rate["answerable"],
+                    true_empty_unrelated=rate["unrelated"],
+                    true_empty_distractors=rate["distractors"],
                 )
             )
     return rows
 
 
-def _best(c: Candidates) -> float:
-    return float(c.scores.max()) if len(c.scores) else NO_EMPTY
+def _best(v: View) -> float:
+    return float(v.scores.max()) if len(v.scores) else NO_EMPTY
 
 
 # --------------------------------------------------------------- compression
@@ -112,6 +149,7 @@ def _best(c: Candidates) -> float:
 @dataclass(frozen=True, slots=True)
 class CompressionRow:
     chunk_config: str
+    scorer: str
     sentence_threshold: float
     max_sentences: int | None
     max_context_tokens: int | None
@@ -124,29 +162,33 @@ class CompressionRow:
 
 def compression_sweep(
     records: Sequence[QuestionRecord],
-    sentence_thresholds: Iterable[float],
+    sentence_thresholds: Mapping[str, Iterable[float]],
     max_sentences: Iterable[int | None],
     budgets: Iterable[tuple[int | None, BudgetStrategy]],
 ) -> list[CompressionRow]:
     """Answerable questions only; the empty rule is disabled (see empty_report)."""
     answerable = [r for r in records if r.answerable]
-    grid = list(itertools.product(sentence_thresholds, max_sentences, budgets))
+    caps, budgets = list(max_sentences), list(budgets)
     rows = []
-    for name in answerable[0].by_config:
+    for name, scorer in itertools.product(answerable[0].by_config, SCORERS):
         cands = [r.by_config[name] for r in answerable]
-        for threshold, cap, (budget, strategy) in grid:
+        views = [view(c, scorer) for c in cands]
+        for threshold, cap, (budget, strategy) in itertools.product(
+            sentence_thresholds[scorer], caps, budgets
+        ):
             kept_answer, kept_tokens, fractions = [], [], []
-            for c in cands:
-                chosen = select_sentences(c.scores, threshold, NO_EMPTY, 1, cap)
-                chosen = [chosen[i] for i in fit_budget(c.tokens[chosen].tolist(), budget, strategy)]
-                tokens = int(c.tokens[chosen].sum())
-                kept_answer.append(bool(c.has_answer[chosen].any()))
+            for c, v in zip(cands, views):
+                chosen = select_sentences(v.scores, threshold, NO_EMPTY, 1, cap)
+                chosen = [chosen[i] for i in fit_budget(v.tokens[chosen].tolist(), budget, strategy)]
+                tokens = int(v.tokens[chosen].sum())
+                kept_answer.append(bool(v.has_answer[chosen].any()))
                 kept_tokens.append(tokens)
                 fractions.append(tokens / c.original_tokens if c.original_tokens else 0.0)
             retrieved = [k for k, c in zip(kept_answer, cands) if c.answer_in_retrieved]
             rows.append(
                 CompressionRow(
                     chunk_config=name,
+                    scorer=scorer,
                     sentence_threshold=round(threshold, 4),
                     max_sentences=cap,
                     max_context_tokens=budget,
@@ -160,7 +202,7 @@ def compression_sweep(
     return rows
 
 
-def pareto(rows: Sequence[CompressionRow]) -> list[CompressionRow]:
+def pareto(rows: Iterable[CompressionRow]) -> list[CompressionRow]:
     """Rows no other row beats on both answer_kept (higher) and kept_fraction (lower)."""
     front: list[CompressionRow] = []
     for row in sorted(rows, key=lambda r: (r.kept_fraction, -r.answer_kept)):

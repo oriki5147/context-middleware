@@ -4,8 +4,12 @@ Purely extractive: sentences are kept verbatim or dropped, never rewritten.
 Each sentence is scored by inner product with the query using the retriever's
 own encoder (title-prefixed, as RECOMP does for decontextualization).
 
-Thresholds are on the encoder's raw score scale, so they are encoder-specific
-and must be calibrated on data; the defaults are placeholders.
+With an optional cross-encoder ``reranker``, the bi-encoder only shortlists
+the top ``rerank_top_n`` sentences, and selection runs on reranker scores.
+
+Thresholds are on the active scorer's scale (bi-encoder inner product, or
+reranker probability), so they are model-specific and must be calibrated on
+data; the defaults are placeholders.
 """
 
 from __future__ import annotations
@@ -49,6 +53,12 @@ class SegmentEncoder(Protocol):
     def embed_segments(self, segments: Sequence[TextSegment]) -> NDArray[np.float32]: ...
 
 
+class Reranker(Protocol):
+    """What the compressor needs from ``ONNXCrossEncoderReranker``."""
+
+    def score(self, query: str, segments: Sequence[TextSegment]) -> NDArray[np.float32]: ...
+
+
 class SelectiveSentenceCompressor:
     def __init__(
         self,
@@ -58,6 +68,8 @@ class SelectiveSentenceCompressor:
         min_sentences: int = 1,
         max_sentences: int | None = None,
         sentence_splitter: SentenceSplitter | None = None,
+        reranker: Reranker | None = None,
+        rerank_top_n: int = 20,
     ) -> None:
         if empty_threshold > sentence_threshold:
             raise ValueError("empty_threshold must not exceed sentence_threshold")
@@ -65,20 +77,25 @@ class SelectiveSentenceCompressor:
             raise ValueError("min_sentences must be non-negative")
         if max_sentences is not None and max_sentences < max(min_sentences, 1):
             raise ValueError("max_sentences must be >= max(min_sentences, 1)")
+        if rerank_top_n <= 0:
+            raise ValueError("rerank_top_n must be positive")
         self.encoder = encoder
         self.sentence_threshold = sentence_threshold
         self.empty_threshold = empty_threshold
         self.min_sentences = min_sentences
         self.max_sentences = max_sentences
+        self.reranker = reranker
+        self.rerank_top_n = rerank_top_n
         self._split = sentence_splitter or pysbd_splitter()
 
     def compress(
-        self, query_embedding: Embedding, chunks: Sequence[TextSegment]
+        self, query_embedding: Embedding, chunks: Sequence[TextSegment], query: str | None = None
     ) -> list[TextSegment]:
         """Return kept sentences, best first, each carrying its ``score``.
 
         ``query_embedding`` comes from the same encoder's ``encode_query``, so
         the engine embeds the query once for both retrieval and compression.
+        ``query`` (the text) is required only when a reranker is configured.
 
         - If even the best sentence scores ``<= empty_threshold``, return ``[]``
           (selective augmentation: let the LLM answer from parametric knowledge).
@@ -89,6 +106,12 @@ class SelectiveSentenceCompressor:
         if not sentences:
             return []
         scores = self.encoder.embed_segments(sentences) @ query_embedding
+        if self.reranker is not None:
+            if query is None:
+                raise ValueError("compress() needs the query text when a reranker is set")
+            shortlist = np.argsort(-scores, kind="stable")[: self.rerank_top_n]
+            sentences = [sentences[i] for i in shortlist]
+            scores = self.reranker.score(query, sentences)
         kept = select_sentences(
             scores,
             self.sentence_threshold,

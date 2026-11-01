@@ -10,6 +10,7 @@ from .config import BudgetStrategy, MiddlewareConfig
 from .models import CompressionResult, TextSegment
 from .preprocessor import MarkItDownPreprocessor
 from .reorderer import ContextReorderer
+from .reranker import ONNXCrossEncoderReranker
 from .retriever import ONNXBiEncoderRetriever, Pooling
 
 # Counts tokens the way the target LLM would; the default is the encoder's
@@ -48,10 +49,22 @@ class CPUMiddlewareEngine:
         normalize: bool = True,
         query_prefix: str = "",
         intra_op_num_threads: int = 0,
+        reranker_dir: str | Path | None = None,
         token_counter: TokenCounter | None = None,
     ) -> CPUMiddlewareEngine:
-        """Build every phase from one config and one encoder directory."""
+        """Build every phase from one config and one encoder directory.
+
+        ``reranker_dir`` (a cross-encoder with ``model_int8.onnx`` and
+        ``tokenizer.json``) enables the optional reranking stage.
+        """
         config = config or MiddlewareConfig()
+        reranker = (
+            None
+            if reranker_dir is None
+            else ONNXCrossEncoderReranker.from_pretrained(
+                reranker_dir, intra_op_num_threads=intra_op_num_threads
+            )
+        )
         retriever = ONNXBiEncoderRetriever.from_pretrained(
             model_dir,
             model_file=model_file,
@@ -71,6 +84,8 @@ class CPUMiddlewareEngine:
                 empty_threshold=config.empty_threshold,
                 min_sentences=config.min_sentences,
                 max_sentences=config.max_sentences,
+                reranker=reranker,
+                rerank_top_n=config.rerank_top_n,
             ),
             reorderer=ContextReorderer(config.reorder_strategy),
             config=config,
@@ -91,7 +106,7 @@ class CPUMiddlewareEngine:
         chunks = self.retriever.search(query_embedding, self.config.top_k)
         original = self.count_tokens("\n\n".join(c.content for c in chunks))
 
-        sentences = self._fit_budget(self.compressor.compress(query_embedding, chunks))
+        sentences = self._fit_budget(self.compressor.compress(query_embedding, chunks, query))
         if not sentences:
             return CompressionResult.empty(original)
 

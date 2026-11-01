@@ -32,9 +32,14 @@ class Example:
     question: str
     answers: tuple[str, ...]
     docs: tuple[Doc, ...]
-    # False for synthetic negatives: the question paired with another
-    # question's passages, none of which contain its answer.
-    answerable: bool = True
+    # "answerable", or a synthetic negative whose passages hold no answer:
+    # "unrelated" (another question's passages, off-topic) or "distractors"
+    # (its own 19 distractors without the gold passage, on-topic and harder).
+    kind: str = "answerable"
+
+    @property
+    def answerable(self) -> bool:
+        return self.kind == "answerable"
 
 
 def download(path: Path = DEFAULT_PATH) -> Path:
@@ -65,7 +70,7 @@ def split(examples: list[Example], seed: int = 0) -> tuple[list[Example], list[E
 def unanswerable(examples: list[Example], seed: int = 1) -> list[Example]:
     """Pair each question with another question's passages (answer-free only).
 
-    These should yield an empty context; they calibrate ``empty_threshold``.
+    Easy negatives (off-topic); they should yield an empty context.
     """
     rng = random.Random(seed)
     out = []
@@ -74,5 +79,19 @@ def unanswerable(examples: list[Example], seed: int = 1) -> list[Example]:
         if other.qid == ex.qid or any(contains_answer(d.text, ex.answers) for d in other.docs):
             continue
         docs = tuple(Doc(d.title, d.text, False) for d in other.docs)
-        out.append(Example(ex.qid, ex.question, ex.answers, docs, answerable=False))
+        out.append(Example(ex.qid, ex.question, ex.answers, docs, kind="unrelated"))
+    return out
+
+
+def distractors_only(examples: list[Example]) -> list[Example]:
+    """Each question with its own distractors, gold passage removed.
+
+    Hard negatives: on-topic passages retrieved for this very question that
+    still lack the answer (questions whose distractors mention it are skipped).
+    """
+    out = []
+    for ex in examples:
+        docs = tuple(d for d in ex.docs if not d.is_gold)
+        if not any(contains_answer(d.text, ex.answers) for d in docs):
+            out.append(Example(ex.qid, ex.question, ex.answers, docs, kind="distractors"))
     return out

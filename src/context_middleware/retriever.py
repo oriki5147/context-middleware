@@ -180,7 +180,7 @@ class ONNXBiEncoderRetriever:
 
     def embed_segments(self, segments: Sequence[TextSegment]) -> NDArray[np.float32]:
         """Embed segments as passages: title-prefixed when they carry a title."""
-        return self.encode([_passage_text(s) for s in segments])
+        return self.encode([passage_text(s) for s in segments])
 
     def add(self, segments: Sequence[TextSegment]) -> None:
         """Embed ``segments`` and append them to the in-memory index."""
@@ -220,7 +220,8 @@ class ONNXBiEncoderRetriever:
         ]
 
 
-def _passage_text(segment: TextSegment) -> str:
+def passage_text(segment: TextSegment) -> str:
+    """Text embedded for a segment: its title (if any) on the line before its content."""
     return f"{segment.title}\n{segment.content}" if segment.title else segment.content
 
 

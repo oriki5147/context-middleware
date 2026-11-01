@@ -31,6 +31,9 @@ class MiddlewareConfig:
     empty_threshold: float = 0.45
     min_sentences: int = 1
     max_sentences: int | None = None
+    # Optional cross-encoder stage: rerank the bi-encoder's top-N sentences.
+    # When enabled, the thresholds above apply to the reranker's scores.
+    rerank_top_n: int = 20
     # Token budget for the final context, filled best sentence first.
     max_context_tokens: int | None = None
     budget_strategy: BudgetStrategy = BudgetStrategy.FILL
@@ -50,5 +53,7 @@ class MiddlewareConfig:
             raise ValueError("min_sentences must be non-negative")
         if self.max_sentences is not None and self.max_sentences < max(self.min_sentences, 1):
             raise ValueError("max_sentences must be >= max(min_sentences, 1)")
+        if self.rerank_top_n <= 0:
+            raise ValueError("rerank_top_n must be positive")
         if self.max_context_tokens is not None and self.max_context_tokens <= 0:
             raise ValueError("max_context_tokens must be positive")

@@ -109,3 +109,34 @@ def test_no_chunks_returns_empty() -> None:
 def test_invalid_parameters_raise(kwargs: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         make(**kwargs)
+
+
+class FakeReranker:
+    def __init__(self, scores: dict[str, float]) -> None:
+        self.scores = scores
+        self.seen: list[str] = []
+
+    def score(self, query: str, segments: Sequence[TextSegment]) -> NDArray[np.float32]:
+        self.seen.extend(s.content for s in segments)
+        return np.array([self.scores[s.content] for s in segments], dtype=np.float32)
+
+
+def test_reranker_rescores_bi_encoder_shortlist_only() -> None:
+    # Bi-encoder order A > B > C > D; reranker prefers C, and D is never shortlisted.
+    reranker = FakeReranker({"A.": 0.2, "B.": 0.1, "C.": 0.9})
+    compressor = make(reranker=reranker, rerank_top_n=3, sentence_threshold=0.5, empty_threshold=0.05)
+    kept = compressor.compress(Q, CHUNKS, "q")
+    assert sorted(reranker.seen) == ["A.", "B.", "C."]
+    assert [s.content for s in kept] == ["C."]
+    assert kept[0].score == pytest.approx(0.9)
+
+
+def test_reranker_scores_drive_the_empty_rule() -> None:
+    reranker = FakeReranker({"A.": 0.01, "B.": 0.02, "C.": 0.03, "D.": 0.0})
+    compressor = make(reranker=reranker, sentence_threshold=0.5, empty_threshold=0.05)
+    assert compressor.compress(Q, CHUNKS, "q") == []
+
+
+def test_reranker_requires_query_text() -> None:
+    with pytest.raises(ValueError):
+        make(reranker=FakeReranker({})).compress(Q, CHUNKS)
