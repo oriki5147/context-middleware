@@ -9,7 +9,7 @@ the top ``rerank_top_n`` sentences, and selection runs on reranker scores.
 
 Thresholds are on the active scorer's scale (bi-encoder inner product, or
 reranker probability), so they are model-specific and must be calibrated on
-data; the defaults are placeholders.
+data; defaults are calibrated for bge-small-en-v1.5 and ms-marco-MiniLM-L6-v2 (INT8).
 """
 
 from __future__ import annotations
@@ -27,13 +27,14 @@ from .sentences import SentenceSplitter, pysbd_splitter, sentence_spans
 
 def select_sentences(
     scores: NDArray[np.float32],
-    sentence_threshold: float,
+    sentence_threshold: float | None,
     empty_threshold: float,
     min_sentences: int = 1,
     max_sentences: int | None = None,
 ) -> list[int]:
     """Indices of kept sentences, best first (ties keep input order).
 
+    ``sentence_threshold=None`` keeps every sentence up to ``max_sentences``.
     Pure function so the evaluation harness sweeps exactly the production rule.
     """
     if len(scores) == 0:
@@ -41,7 +42,8 @@ def select_sentences(
     order = np.argsort(-scores, kind="stable")
     if scores[order[0]] <= empty_threshold:
         return []
-    keep = max(int((scores >= sentence_threshold).sum()), min_sentences)
+    passing = len(scores) if sentence_threshold is None else int((scores >= sentence_threshold).sum())
+    keep = max(passing, min_sentences)
     if max_sentences is not None:
         keep = min(keep, max_sentences)
     return [int(i) for i in order[:keep]]
@@ -63,16 +65,14 @@ class SelectiveSentenceCompressor:
     def __init__(
         self,
         encoder: SegmentEncoder,
-        sentence_threshold: float = 0.65,
-        empty_threshold: float = 0.45,
+        sentence_threshold: float | None = None,
+        empty_threshold: float = 0.64,
         min_sentences: int = 1,
-        max_sentences: int | None = None,
+        max_sentences: int | None = 3,
         sentence_splitter: SentenceSplitter | None = None,
         reranker: Reranker | None = None,
         rerank_top_n: int = 20,
     ) -> None:
-        if empty_threshold > sentence_threshold:
-            raise ValueError("empty_threshold must not exceed sentence_threshold")
         if min_sentences < 0:
             raise ValueError("min_sentences must be non-negative")
         if max_sentences is not None and max_sentences < max(min_sentences, 1):
@@ -99,8 +99,8 @@ class SelectiveSentenceCompressor:
 
         - If even the best sentence scores ``<= empty_threshold``, return ``[]``
           (selective augmentation: let the LLM answer from parametric knowledge).
-        - Otherwise keep every sentence scoring ``>= sentence_threshold``, but at
-          least the top ``min_sentences`` and at most ``max_sentences``.
+        - Otherwise keep the best ``max_sentences``; with a ``sentence_threshold``,
+          drop those below it, keeping at least the top ``min_sentences``.
         """
         sentences = self.split(chunks)
         if not sentences:

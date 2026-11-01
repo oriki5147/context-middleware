@@ -45,8 +45,8 @@ class MarkItDownPreprocessor:
     def __init__(
         self,
         tokenizer: OffsetTokenizerLike,
-        chunk_size_tokens: int = 120,
-        chunk_overlap_tokens: int = 30,
+        chunk_size_tokens: int = 64,
+        chunk_overlap_tokens: int = 0,
         sentence_splitter: SentenceSplitter | None = None,
     ) -> None:
         if chunk_size_tokens <= 0:
@@ -62,8 +62,8 @@ class MarkItDownPreprocessor:
     def from_pretrained(
         cls,
         model_dir: str | Path,
-        chunk_size_tokens: int = 120,
-        chunk_overlap_tokens: int = 30,
+        chunk_size_tokens: int = 64,
+        chunk_overlap_tokens: int = 0,
         sentence_splitter: SentenceSplitter | None = None,
     ) -> MarkItDownPreprocessor:
         """Load ``<model_dir>/tokenizer.json``: a separate instance from the retriever's,

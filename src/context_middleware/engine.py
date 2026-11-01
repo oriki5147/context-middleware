@@ -81,7 +81,9 @@ class CPUMiddlewareEngine:
             compressor=SelectiveSentenceCompressor(
                 retriever,
                 sentence_threshold=config.sentence_threshold,
-                empty_threshold=config.empty_threshold,
+                empty_threshold=(
+                    config.empty_threshold if reranker is None else config.rerank_empty_threshold
+                ),
                 min_sentences=config.min_sentences,
                 max_sentences=config.max_sentences,
                 reranker=reranker,

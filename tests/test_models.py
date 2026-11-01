@@ -28,6 +28,15 @@ def test_empty_result_rejects_content() -> None:
         CompressionResult("text", 10, 1, 0.1, is_empty=True)
 
 
-def test_config_rejects_inverted_thresholds() -> None:
+def test_config_defaults_follow_evaluation() -> None:
+    config = MiddlewareConfig()
+    assert (config.chunk_size_tokens, config.chunk_overlap_tokens) == (64, 0)
+    assert (config.max_sentences, config.sentence_threshold) == (3, None)
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"max_sentences": 1, "min_sentences": 2}, {"chunk_overlap_tokens": 64}]
+)
+def test_config_rejects_inconsistent_values(kwargs: dict[str, int]) -> None:
     with pytest.raises(ValueError):
-        MiddlewareConfig(sentence_threshold=0.4, empty_threshold=0.5)
+        MiddlewareConfig(**kwargs)  # type: ignore[arg-type]

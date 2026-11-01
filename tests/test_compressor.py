@@ -34,7 +34,11 @@ SCORES = {"A.": 0.9, "B.": 0.7, "C.": 0.5, "D.": 0.2}
 
 
 def make(**kwargs: Any) -> SelectiveSentenceCompressor:
+    """Threshold-driven by default here, to test the threshold rules in isolation."""
     kwargs.setdefault("sentence_splitter", period_splitter)
+    kwargs.setdefault("sentence_threshold", 0.65)
+    kwargs.setdefault("empty_threshold", 0.45)
+    kwargs.setdefault("max_sentences", None)
     return SelectiveSentenceCompressor(FakeEncoder(SCORES), **kwargs)
 
 
@@ -50,6 +54,18 @@ def test_keeps_sentences_above_threshold_best_first() -> None:
     assert [s.content for s in kept] == ["A.", "B."]
     assert [s.score for s in kept] == pytest.approx([0.9, 0.7])
     assert [s.segment_id for s in kept] == ["doc#0:1", "doc#1:0"]
+
+
+def test_default_selection_is_cap_driven() -> None:
+    # Production defaults: no sentence threshold, keep the best 3.
+    compressor = SelectiveSentenceCompressor(FakeEncoder(SCORES), sentence_splitter=period_splitter)
+    assert [s.content for s in compressor.compress(Q, CHUNKS)] == ["A.", "B.", "C."]
+
+
+def test_default_empty_threshold_applies() -> None:
+    low = FakeEncoder({"A.": 0.6, "B.": 0.5})
+    compressor = SelectiveSentenceCompressor(low, sentence_splitter=period_splitter)
+    assert compressor.compress(Q, [chunk("doc#0", "A. B.")]) == []  # 0.6 <= 0.64
 
 
 def test_empty_when_best_sentence_at_or_below_empty_threshold() -> None:
@@ -100,7 +116,6 @@ def test_no_chunks_returns_empty() -> None:
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"sentence_threshold": 0.4, "empty_threshold": 0.5},
         {"min_sentences": -1},
         {"max_sentences": 0},
         {"min_sentences": 3, "max_sentences": 2},

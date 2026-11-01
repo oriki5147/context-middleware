@@ -49,8 +49,12 @@ CHUNKS = [
 
 
 def make_engine(**config: Any) -> tuple[CPUMiddlewareEngine, FakeTokenizer]:
+    """Threshold-driven (0.65 / 0.45, no cap) so the fake scores separate cleanly."""
     tokenizer = FakeTokenizer()
     retriever = ONNXBiEncoderRetriever(FakeSession(), tokenizer, pooling=Pooling.MEAN)
+    config.setdefault("sentence_threshold", 0.65)
+    config.setdefault("empty_threshold", 0.45)
+    config.setdefault("max_sentences", None)
     cfg = MiddlewareConfig(**config)
     engine = CPUMiddlewareEngine(
         preprocessor=MarkItDownPreprocessor(WhitespaceTokenizer(), sentence_splitter=line_splitter),
@@ -60,6 +64,7 @@ def make_engine(**config: Any) -> tuple[CPUMiddlewareEngine, FakeTokenizer]:
             sentence_threshold=cfg.sentence_threshold,
             empty_threshold=cfg.empty_threshold,
             min_sentences=cfg.min_sentences,
+            max_sentences=cfg.max_sentences,
             sentence_splitter=line_splitter,
         ),
         reorderer=ContextReorderer(cfg.reorder_strategy),

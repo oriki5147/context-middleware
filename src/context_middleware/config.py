@@ -1,4 +1,8 @@
-"""Pipeline tunables, defaulted to the values in Architecture.md."""
+"""Pipeline tunables.
+
+Defaults follow the NQ multi-document dev evaluation (see evaluation/), not the
+original illustrative values in Architecture.md.
+"""
 
 from __future__ import annotations
 
@@ -18,21 +22,27 @@ class BudgetStrategy(str, Enum):
 @dataclass(frozen=True, slots=True)
 class MiddlewareConfig:
     # Phase 1: sentence-aligned chunks of at most chunk_size_tokens, with at
-    # least chunk_overlap_tokens of whole sentences carried over.
-    chunk_size_tokens: int = 120
-    chunk_overlap_tokens: int = 30
-    # Phase 2: number of candidate chunks from dense retrieval.
-    top_k: int = 10
-    # Phase 3: keep sentences scoring >= sentence_threshold (at least
-    # min_sentences, at most max_sentences); if every sentence scores
-    # <= empty_threshold, return an empty context instead. Scores are on the
-    # encoder's own scale, so these are placeholders to calibrate per encoder.
-    sentence_threshold: float = 0.65
-    empty_threshold: float = 0.45
+    # least chunk_overlap_tokens of whole sentences carried over. Small chunks
+    # without overlap retrieved the answer most often at equal token budgets.
+    chunk_size_tokens: int = 64
+    chunk_overlap_tokens: int = 0
+    # Phase 2: number of candidate chunks; 25 x ~47-token chunks ~= the
+    # 1,200 tokens retrieved in the evaluation.
+    top_k: int = 25
+    # Phase 3: selection is driven by the cap: keep the best max_sentences.
+    # sentence_threshold (optional) additionally drops sentences below it,
+    # down to min_sentences. Evaluation showed caps, not thresholds, set the
+    # compression/answer trade-off.
+    max_sentences: int | None = 3
+    sentence_threshold: float | None = None
     min_sentences: int = 1
-    max_sentences: int | None = None
+    # Empty context when even the best sentence scores <= the threshold of
+    # the active scorer. This reliably catches off-topic queries, NOT on-topic
+    # queries whose answer is absent. Calibrated for bge-small-en-v1.5 INT8
+    # and ms-marco-MiniLM-L6-v2 INT8; recalibrate when changing models.
+    empty_threshold: float = 0.64
+    rerank_empty_threshold: float = 0.01
     # Optional cross-encoder stage: rerank the bi-encoder's top-N sentences.
-    # When enabled, the thresholds above apply to the reranker's scores.
     rerank_top_n: int = 20
     # Token budget for the final context, filled best sentence first.
     max_context_tokens: int | None = None
@@ -47,8 +57,6 @@ class MiddlewareConfig:
             raise ValueError("chunk_overlap_tokens must be in [0, chunk_size_tokens)")
         if self.top_k <= 0:
             raise ValueError("top_k must be positive")
-        if self.empty_threshold > self.sentence_threshold:
-            raise ValueError("empty_threshold must not exceed sentence_threshold")
         if self.min_sentences < 0:
             raise ValueError("min_sentences must be non-negative")
         if self.max_sentences is not None and self.max_sentences < max(self.min_sentences, 1):
