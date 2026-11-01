@@ -45,7 +45,10 @@ class View:
 def available_scorers(records: Sequence[QuestionRecord]) -> list[str]:
     """Scorers with cached scores (caches built before the reader lack it)."""
     sample = next(iter(records[0].by_config.values()))
-    return [s for s in SCORERS if s == "bi" or hasattr(sample, f"{s.rstrip('0123456789')}_scores")]
+    return [
+        s for s in SCORERS
+        if s == "bi" or getattr(sample, f"{s.rstrip('0123456789')}_scores", None) is not None
+    ]
 
 
 def _scorers(records: Sequence[QuestionRecord], grids: Mapping[str, object]) -> list[str]:
@@ -58,7 +61,9 @@ def view(c: Candidates, scorer: str) -> View:
         return View(c.scores, c.tokens, c.has_answer)
     stage = scorer.rstrip("0123456789")
     top_n = int(scorer.removeprefix(stage))
-    stage_scores: NDArray[np.float32] = getattr(c, f"{stage}_scores")
+    stage_scores: NDArray[np.float32] | None = getattr(c, f"{stage}_scores")
+    if stage_scores is None:
+        raise ValueError(f"{scorer} scores were not computed for this cache")
     # Same shortlist as production, kept in bi-encoder order so that ties in
     # second-stage scores break the same way select_sentences breaks them there.
     shortlist = np.argsort(-c.scores, kind="stable")[:top_n]

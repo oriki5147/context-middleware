@@ -75,7 +75,7 @@ class Candidates:
     answer_in_retrieved: bool  # an answer string occurs in the retrieved chunks
     scores: NDArray[np.float32]  # bi-encoder sentence-query inner products
     rerank_scores: NDArray[np.float32]  # cross-encoder scores; NaN if not shortlisted
-    reader_scores: NDArray[np.float32]  # reader answer margins; NaN if not shortlisted
+    reader_scores: NDArray[np.float32] | None  # reader margins; NaN if not shortlisted; None if not computed
     tokens: NDArray[np.int32]
     has_answer: NDArray[np.bool_]
 

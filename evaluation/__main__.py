@@ -1,9 +1,13 @@
 """Usage:
     python -m evaluation build  --split dev [--limit N] [--negatives N] [--configs 64 ...] [--tag T]
     python -m evaluation report --split dev [--tag T]
+    python -m evaluation build-raw  --split dev [--limit N] [--negatives N] [--tag T]
+    python -m evaluation report-raw --split dev [--tag T]
 
 ``build`` runs the models once (slow) and caches candidates to data/eval/;
 ``report`` sweeps selection rules over the cache (fast) and writes CSVs.
+The ``-raw`` variants cache raw material instead (see ``evaluation.raw``) and
+derive the production pipeline from it, so new experiments need no re-encoding.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ import numpy as np
 
 from context_middleware import BudgetStrategy
 
-from . import candidates, nq_data, sweep
+from . import candidates, nq_data, raw, sweep
 
 OUT = Path("data/eval")
 MODEL = Path("models/bge-small-en-v1.5")
@@ -41,7 +45,7 @@ EMPTY_THRESHOLDS = {s: _GRIDS[s.rstrip("0123456789")][1] for s in sweep.SCORERS}
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["build", "report"])
+    parser.add_argument("command", choices=["build", "report", "build-raw", "report-raw"])
     parser.add_argument("--split", choices=["dev", "test"], default="dev")
     parser.add_argument("--limit", type=int, default=None, help="answerable questions")
     parser.add_argument("--negatives", type=int, default=None, help="per negative kind")
@@ -50,14 +54,24 @@ def main() -> None:
     args = parser.parse_args()
     name = args.split + (f"_{args.tag}" if args.tag else "")
     cache = OUT / f"{name}.pkl"
+    raw_cache = OUT / f"{name}_raw.pkl"
 
-    if args.command == "build":
+    if args.command in ("build", "build-raw"):
         dev, test = nq_data.split(nq_data.load())
         examples = (dev if args.split == "dev" else test)[: args.limit]
         negatives = (
             nq_data.unanswerable(examples)[: args.negatives]
             + nq_data.distractors_only(examples)[: args.negatives]
         )
+    if args.command == "build-raw":
+        print(f"building raw material: {len(examples)} answerable + {len(negatives)} unanswerable ({args.split})")
+        raw.save(raw.build(examples + negatives, MODEL, RERANKER), raw_cache)
+        print(f"saved {raw_cache}")
+    elif args.command == "report-raw":
+        raws = raw.load(raw_cache)
+        records = [candidates.QuestionRecord(r.qid, r.kind, {"64": raw.derive(r)}) for r in raws]
+        report(records, OUT / "results" / f"{name}_raw")
+    elif args.command == "build":
         configs = [c for c in candidates.CHUNK_CONFIGS if not args.configs or c.name in args.configs]
         print(
             f"building {len(examples)} answerable + {len(negatives)} unanswerable ({args.split}), "
