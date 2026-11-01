@@ -28,6 +28,29 @@ class PairTokenizerLike(Protocol):
     def encode_batch(self, input: list[tuple[str, str]]) -> Sequence[EncodingLike]: ...
 
 
+def load_pair_model(
+    model_dir: str | Path, model_file: str, max_length: int, intra_op_num_threads: int
+) -> tuple[Any, Any]:
+    """CPU ONNX session + padded, truncating tokenizer for (query, passage) models."""
+    import onnxruntime as ort
+    from tokenizers import Tokenizer
+
+    model_dir = Path(model_dir)
+    options = ort.SessionOptions()
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    options.intra_op_num_threads = intra_op_num_threads
+    session = ort.InferenceSession(
+        str(model_dir / model_file), sess_options=options, providers=["CPUExecutionProvider"]
+    )
+    tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
+    tokenizer.enable_truncation(max_length=max_length)
+    # BERT vocabularies pad with [PAD], RoBERTa ones with <pad>.
+    pad_token = next((t for t in ("[PAD]", "<pad>") if tokenizer.token_to_id(t) is not None), "[PAD]")
+    pad_id = tokenizer.token_to_id(pad_token)
+    tokenizer.enable_padding(pad_id=0 if pad_id is None else pad_id, pad_token=pad_token)
+    return session, tokenizer
+
+
 class ONNXCrossEncoderReranker:
     def __init__(
         self, session: SessionLike, tokenizer: PairTokenizerLike, *, batch_size: int = 32
@@ -49,20 +72,7 @@ class ONNXCrossEncoderReranker:
         intra_op_num_threads: int = 0,
         batch_size: int = 32,
     ) -> ONNXCrossEncoderReranker:
-        import onnxruntime as ort
-        from tokenizers import Tokenizer
-
-        model_dir = Path(model_dir)
-        options = ort.SessionOptions()
-        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        options.intra_op_num_threads = intra_op_num_threads
-        session = ort.InferenceSession(
-            str(model_dir / model_file), sess_options=options, providers=["CPUExecutionProvider"]
-        )
-        tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
-        tokenizer.enable_truncation(max_length=max_length)
-        pad_id = tokenizer.token_to_id("[PAD]")
-        tokenizer.enable_padding(pad_id=0 if pad_id is None else pad_id, pad_token="[PAD]")
+        session, tokenizer = load_pair_model(model_dir, model_file, max_length, intra_op_num_threads)
         return cls(session, tokenizer, batch_size=batch_size)
 
     def score(self, query: str, segments: Sequence[TextSegment]) -> NDArray[np.float32]:

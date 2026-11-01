@@ -84,6 +84,8 @@ def cands(
         answer_in_retrieved=answer_at is not None,
         scores=np.array(scores, dtype=np.float32),
         rerank_scores=np.array(rerank if rerank else [np.nan] * len(scores), dtype=np.float32),
+        # The reader mirrors the reranker here; scorer plumbing is shared.
+        reader_scores=np.array(rerank if rerank else [np.nan] * len(scores), dtype=np.float32),
         tokens=np.full(len(scores), tokens, dtype=np.int32),
         has_answer=has,
     )

@@ -5,7 +5,9 @@ so a row here is exactly what the middleware would output with that config.
 Scorers are compared on identical candidates:
   - "bi":        bi-encoder scores over all candidate sentences;
   - "rerank<N>": cross-encoder scores over the bi-encoder's top-N shortlist
-                 (production ``rerank_top_n = N``).
+                 (production ``rerank_top_n = N``);
+  - "reader<N>": extractive-reader answer margins over the same shortlist.
+Only scorers whose scores are in the cache are reported.
 """
 
 from __future__ import annotations
@@ -26,7 +28,8 @@ from context_middleware.engine import fit_budget
 from .candidates import Candidates, QuestionRecord
 
 NO_EMPTY = float("-inf")  # disables the empty-context rule
-SCORERS = ("bi", "rerank10", "rerank20", "rerank30", "rerank50")
+SHORTLISTS = (10, 20, 30, 50)
+SCORERS = ("bi", *(f"{stage}{n}" for stage in ("rerank", "reader") for n in SHORTLISTS))
 NEGATIVE_KINDS = ("unrelated", "distractors")
 
 
@@ -39,16 +42,29 @@ class View:
     has_answer: NDArray[np.bool_]
 
 
+def available_scorers(records: Sequence[QuestionRecord]) -> list[str]:
+    """Scorers with cached scores (caches built before the reader lack it)."""
+    sample = next(iter(records[0].by_config.values()))
+    return [s for s in SCORERS if s == "bi" or hasattr(sample, f"{s.rstrip('0123456789')}_scores")]
+
+
+def _scorers(records: Sequence[QuestionRecord], grids: Mapping[str, object]) -> list[str]:
+    """Available scorers that the caller supplied thresholds for."""
+    return [s for s in available_scorers(records) if s in grids]
+
+
 def view(c: Candidates, scorer: str) -> View:
     if scorer == "bi":
         return View(c.scores, c.tokens, c.has_answer)
-    top_n = int(scorer.removeprefix("rerank"))
+    stage = scorer.rstrip("0123456789")
+    top_n = int(scorer.removeprefix(stage))
+    stage_scores: NDArray[np.float32] = getattr(c, f"{stage}_scores")
     # Same shortlist as production, kept in bi-encoder order so that ties in
-    # reranker scores break the same way select_sentences breaks them there.
+    # second-stage scores break the same way select_sentences breaks them there.
     shortlist = np.argsort(-c.scores, kind="stable")[:top_n]
-    if np.isnan(c.rerank_scores[shortlist]).any():
-        raise ValueError(f"{scorer} exceeds the cached rerank shortlist")
-    return View(c.rerank_scores[shortlist], c.tokens[shortlist], c.has_answer[shortlist])
+    if np.isnan(stage_scores[shortlist]).any():
+        raise ValueError(f"{scorer} exceeds the cached shortlist")
+    return View(stage_scores[shortlist], c.tokens[shortlist], c.has_answer[shortlist])
 
 
 # ----------------------------------------------------------------- retrieval
@@ -72,7 +88,7 @@ class RetrievalRow:
 def retrieval_report(records: Sequence[QuestionRecord]) -> list[RetrievalRow]:
     rows = []
     answerable = [r for r in records if r.answerable]
-    for name, scorer in itertools.product(answerable[0].by_config, SCORERS):
+    for name, scorer in itertools.product(answerable[0].by_config, available_scorers(records)):
         cands = [r.by_config[name] for r in answerable]
         views = [view(c, scorer) for c in cands]
         ranks = [_answer_rank(v) for v in views]
@@ -119,7 +135,7 @@ def empty_report(
     records: Sequence[QuestionRecord], thresholds: Mapping[str, Iterable[float]]
 ) -> list[EmptyRow]:
     rows = []
-    for name, scorer in itertools.product(records[0].by_config, SCORERS):
+    for name, scorer in itertools.product(records[0].by_config, _scorers(records, thresholds)):
         best = {
             kind: np.array([_best(view(r.by_config[name], scorer)) for r in records if r.kind == kind])
             for kind in ("answerable", *NEGATIVE_KINDS)
@@ -170,7 +186,7 @@ def compression_sweep(
     answerable = [r for r in records if r.answerable]
     caps, budgets = list(max_sentences), list(budgets)
     rows = []
-    for name, scorer in itertools.product(answerable[0].by_config, SCORERS):
+    for name, scorer in itertools.product(answerable[0].by_config, _scorers(records, sentence_thresholds)):
         cands = [r.by_config[name] for r in answerable]
         views = [view(c, scorer) for c in cands]
         for threshold, cap, (budget, strategy) in itertools.product(

@@ -3,8 +3,8 @@
 For every chunking config, each question's 20 passages are chunked with the
 production preprocessor, the best chunks are retrieved by inner product, and
 the production compressor splits them into candidate sentences. We store each
-candidate's bi-encoder score, cross-encoder score (bi-encoder shortlist only),
-token count and whether it contains an answer, so selection rules (scorer,
+candidate's bi-encoder score, cross-encoder and reader scores (bi-encoder
+shortlist only), token count and whether it contains an answer, so selection rules (scorer,
 thresholds, caps, budgets) can later be swept without any model.
 
 Model outputs are computed once per unique (title, text) per question, so
@@ -30,8 +30,10 @@ from context_middleware import (
     SelectiveSentenceCompressor,
     TextSegment,
 )
+from context_middleware.compressor import Reranker
 
 from .answers import contains_answer
+from .reader import ONNXExtractiveReader
 from .nq_data import Example
 
 
@@ -57,8 +59,8 @@ CHUNK_CONFIGS = [
 # fixed K), so all configs hand the compressor equal amounts of text and
 # differ only in how it was chunked.
 RETRIEVAL_TOKENS = 1200
-# The cross-encoder scores this many bi-encoder-best sentences; the sweep can
-# then emulate any production ``rerank_top_n`` up to this value.
+# The cross-encoder and reader score this many bi-encoder-best sentences; the
+# sweep can then emulate any production ``rerank_top_n`` up to this value.
 RERANK_TOP_N = 50
 
 _Key = tuple[str, str]  # (title, content)
@@ -73,6 +75,7 @@ class Candidates:
     answer_in_retrieved: bool  # an answer string occurs in the retrieved chunks
     scores: NDArray[np.float32]  # bi-encoder sentence-query inner products
     rerank_scores: NDArray[np.float32]  # cross-encoder scores; NaN if not shortlisted
+    reader_scores: NDArray[np.float32]  # reader answer margins; NaN if not shortlisted
     tokens: NDArray[np.int32]
     has_answer: NDArray[np.bool_]
 
@@ -92,6 +95,7 @@ def build(
     examples: Iterable[Example],
     model_dir: Path,
     reranker_dir: Path,
+    reader_dir: Path,
     configs: list[ChunkConfig] = CHUNK_CONFIGS,
     threads: int = 8,
     log: Callable[[str], None] = print,
@@ -99,7 +103,10 @@ def build(
     encoder = ONNXBiEncoderRetriever.from_pretrained(
         model_dir, query_prefix=BGE_QUERY_PREFIX, intra_op_num_threads=threads
     )
-    reranker = ONNXCrossEncoderReranker.from_pretrained(reranker_dir, intra_op_num_threads=threads)
+    second_stage: dict[str, Reranker] = {
+        "rerank": ONNXCrossEncoderReranker.from_pretrained(reranker_dir, intra_op_num_threads=threads),
+        "reader": ONNXExtractiveReader.from_pretrained(reader_dir, intra_op_num_threads=threads),
+    }
     preprocessors = {
         c.name: MarkItDownPreprocessor.from_pretrained(model_dir, c.size, c.overlap) for c in configs
     }
@@ -107,7 +114,8 @@ def build(
     splitter = SelectiveSentenceCompressor(encoder)  # only its split() is used
 
     records = []
-    rerank_seconds, rerank_calls = 0.0, 0
+    seconds = {name: 0.0 for name in second_stage}
+    calls = 0
     start = time.perf_counter()
     examples = list(examples)
     for n, ex in enumerate(examples, 1):
@@ -124,29 +132,29 @@ def build(
         bi.scores([s for c in configs for s in sentences[c.name]])  # one batched pass
 
         gold = {f"d{j}" for j, d in enumerate(ex.docs) if d.is_gold}
-        reranked: dict[_Key, float] = {}
+        stage_scores: dict[str, dict[_Key, float]] = {name: {} for name in second_stage}
         by_config = {}
         for c in configs:
             top_chunks, sents = retrieved[c.name], sentences[c.name]
             text = "\n\n".join(ch.content for ch in top_chunks)
             bi_scores = bi.scores(sents)
             shortlist = [sents[i] for i in np.argsort(-bi_scores, kind="stable")[:RERANK_TOP_N]]
-            todo = [s for s in shortlist if _key(s) not in reranked]
+            todo = [s for s in shortlist if _key(s) not in stage_scores["rerank"]]
             if todo:
-                t = time.perf_counter()
-                reranked.update(zip(map(_key, todo), map(float, reranker.score(ex.question, todo))))
-                rerank_seconds += time.perf_counter() - t
-                rerank_calls += 1
+                calls += 1
+                for name, model in second_stage.items():
+                    t = time.perf_counter()
+                    values = model.score(ex.question, todo)
+                    seconds[name] += time.perf_counter() - t
+                    stage_scores[name].update(zip(map(_key, todo), map(float, values)))
             listed = {_key(s) for s in shortlist}
             by_config[c.name] = Candidates(
                 original_tokens=count_tokens(text),
                 gold_retrieved=any(ch.source_doc in gold for ch in top_chunks),
                 answer_in_retrieved=ex.answerable and contains_answer(text, ex.answers),
                 scores=bi_scores,
-                rerank_scores=np.array(
-                    [reranked[_key(s)] if _key(s) in listed else np.nan for s in sents],
-                    dtype=np.float32,
-                ),
+                rerank_scores=_shortlisted(stage_scores["rerank"], sents, listed),
+                reader_scores=_shortlisted(stage_scores["reader"], sents, listed),
                 tokens=np.array([count_tokens(s.content) for s in sents], dtype=np.int32),
                 has_answer=np.array(
                     [ex.answerable and contains_answer(s.content, ex.answers) for s in sents],
@@ -157,9 +165,18 @@ def build(
         if n % 50 == 0 or n == len(examples):
             rate = (time.perf_counter() - start) / n
             log(f"  {n}/{len(examples)}  {rate:.2f}s/question  ~{rate * (len(examples) - n) / 60:.0f} min left")
-    if rerank_calls:
-        log(f"reranker: {1000 * rerank_seconds / rerank_calls:.0f} ms per call (<= {RERANK_TOP_N} sentences)")
+    for name, total in seconds.items():
+        if calls:
+            log(f"{name}: {1000 * total / calls:.0f} ms per call (<= {RERANK_TOP_N} sentences)")
     return records
+
+
+def _shortlisted(
+    scores: dict[_Key, float], sentences: list[TextSegment], listed: set[_Key]
+) -> NDArray[np.float32]:
+    return np.array(
+        [scores[_key(s)] if _key(s) in listed else np.nan for s in sentences], dtype=np.float32
+    )
 
 
 def _key(segment: TextSegment) -> _Key:
