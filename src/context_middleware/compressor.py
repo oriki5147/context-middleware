@@ -87,6 +87,24 @@ class SelectiveSentenceCompressor:
         self.reranker = reranker
         self.rerank_top_n = rerank_top_n
         self._split = sentence_splitter or pysbd_splitter()
+        # Ingest-time caches (see precompute): sentence texts per chunk, and
+        # bi-encoder embeddings per (title, sentence). Pure optimizations:
+        # anything missing is computed on demand with identical results.
+        self._chunk_sentences: dict[tuple[str, str], list[str]] = {}
+        self._embeddings: dict[tuple[str, str], NDArray[np.float32]] = {}
+
+    def precompute(self, chunks: Sequence[TextSegment]) -> None:
+        """Split and embed ``chunks``' sentences ahead of queries (call at ingest).
+
+        Moves sentence segmentation and embedding, the bulk of compress()'s
+        cost, out of the query path; only the optional reranker then runs per
+        query.
+        """
+        self._embed(self.split(chunks))
+
+    def clear_cache(self) -> None:
+        self._chunk_sentences.clear()
+        self._embeddings.clear()
 
     def compress(
         self, query_embedding: Embedding, chunks: Sequence[TextSegment], query: str | None = None
@@ -105,7 +123,7 @@ class SelectiveSentenceCompressor:
         sentences = self.split(chunks)
         if not sentences:
             return []
-        scores = self.encoder.embed_segments(sentences) @ query_embedding
+        scores = self._embed(sentences) @ query_embedding
         if self.reranker is not None:
             if query is None:
                 raise ValueError("compress() needs the query text when a reranker is set")
@@ -130,8 +148,7 @@ class SelectiveSentenceCompressor:
         seen: set[tuple[str, str]] = set()
         sentences: list[TextSegment] = []
         for chunk in chunks:
-            for j, (start, end) in enumerate(sentence_spans(chunk.content, self._split)):
-                text = chunk.content[start:end]
+            for j, text in enumerate(self._sentences_of(chunk)):
                 if (chunk.source_doc, text) in seen:
                     continue
                 seen.add((chunk.source_doc, text))
@@ -144,3 +161,25 @@ class SelectiveSentenceCompressor:
                     )
                 )
         return sentences
+
+    def _sentences_of(self, chunk: TextSegment) -> list[str]:
+        key = (chunk.segment_id, chunk.content)
+        if key not in self._chunk_sentences:
+            self._chunk_sentences[key] = [
+                chunk.content[start:end] for start, end in sentence_spans(chunk.content, self._split)
+            ]
+        return self._chunk_sentences[key]
+
+    def _embed(self, sentences: Sequence[TextSegment]) -> NDArray[np.float32]:
+        """Embeddings for ``sentences`` from the cache, encoding (and caching) misses."""
+        missing = list({_key(s): s for s in sentences if _key(s) not in self._embeddings}.values())
+        if missing:
+            self._embeddings.update(zip(map(_key, missing), self.encoder.embed_segments(missing)))
+        if not sentences:
+            return np.empty((0, 0), dtype=np.float32)
+        return np.stack([self._embeddings[_key(s)] for s in sentences])
+
+
+def _key(segment: TextSegment) -> tuple[str, str]:
+    """What a sentence's embedding depends on: its title and its text."""
+    return (segment.title, segment.content)

@@ -96,7 +96,12 @@ class CPUMiddlewareEngine:
 
     def ingest(self, paths: Iterable[str | Path]) -> None:
         for path in paths:
-            self.retriever.add(self.preprocessor.process(path))
+            self.add_chunks(self.preprocessor.process(path))
+
+    def add_chunks(self, chunks: Sequence[TextSegment]) -> None:
+        """Index chunks and precompute their sentence embeddings (query-time savings)."""
+        self.retriever.add(chunks)
+        self.compressor.precompute(chunks)
 
     def optimize(self, query: str) -> CompressionResult:
         """Retrieve -> compress -> budget -> reorder, returning the LLM context.

@@ -93,7 +93,9 @@ def test_overlap_duplicates_scored_once_first_occurrence_wins() -> None:
 
     kept = compressor.compress(Q, overlapping)
 
-    assert [s.content for s in encoder.embedded] == ["B.", "A.", "C.", "A."]  # per-doc dedupe
+    # Overlap repeats are dropped per document; the identical (title, text) from
+    # another document reuses the same embedding but is still kept separately.
+    assert [s.content for s in encoder.embedded] == ["B.", "A.", "C."]
     assert [(s.segment_id, s.content) for s in kept] == [
         ("doc#1:1", "A."),
         ("x#0:0", "A."),
@@ -155,3 +157,36 @@ def test_reranker_scores_drive_the_empty_rule() -> None:
 def test_reranker_requires_query_text() -> None:
     with pytest.raises(ValueError):
         make(reranker=FakeReranker({})).compress(Q, CHUNKS)
+
+
+def test_precompute_moves_embedding_out_of_the_query_path() -> None:
+    encoder = FakeEncoder(SCORES)
+    compressor = SelectiveSentenceCompressor(encoder, sentence_splitter=period_splitter)
+    compressor.precompute(CHUNKS)
+    embedded_at_ingest = len(encoder.embedded)
+    assert embedded_at_ingest == 4
+
+    kept = compressor.compress(Q, CHUNKS)
+
+    assert len(encoder.embedded) == embedded_at_ingest  # nothing encoded at query time
+    cold = SelectiveSentenceCompressor(FakeEncoder(SCORES), sentence_splitter=period_splitter)
+    assert kept == cold.compress(Q, CHUNKS)  # identical results with or without the cache
+
+
+def test_cache_misses_are_encoded_once_then_reused() -> None:
+    encoder = FakeEncoder(SCORES)
+    compressor = SelectiveSentenceCompressor(encoder, sentence_splitter=period_splitter)
+    compressor.precompute(CHUNKS[:1])
+    compressor.compress(Q, CHUNKS)  # "B." was not precomputed
+    compressor.compress(Q, CHUNKS)
+    assert [s.content for s in encoder.embedded].count("B.") == 1
+    compressor.clear_cache()
+    compressor.compress(Q, CHUNKS)
+    assert [s.content for s in encoder.embedded].count("B.") == 2
+
+
+def test_same_sentence_under_different_titles_is_embedded_separately() -> None:
+    encoder = FakeEncoder(SCORES)
+    compressor = SelectiveSentenceCompressor(encoder, sentence_splitter=period_splitter)
+    compressor.precompute([chunk("a#0", "A.", "a", title="T1"), chunk("b#0", "A.", "b", title="T2")])
+    assert [s.title for s in encoder.embedded] == ["T1", "T2"]
