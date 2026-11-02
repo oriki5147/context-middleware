@@ -18,6 +18,8 @@ dependencies = [
 ingest = ["markitdown[all]>=0.1"]
 # Offline FP32 -> INT8 conversion only (context_middleware.quantization).
 quantize = ["onnx>=1.16"]
+# Level 2 evaluation only (evaluation/llm_clients.py); local Qwen needs Ollama.
+llm = ["anthropic>=2.3"]
 dev = ["pytest>=8", "mypy>=1.10"]
 
 [tool.hatch.build.targets.wheel]

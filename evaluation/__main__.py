@@ -45,7 +45,13 @@ EMPTY_THRESHOLDS = {s: _GRIDS[s.rstrip("0123456789")][1] for s in sweep.SCORERS}
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["build", "report", "build-raw", "report-raw", "experiments"])
+    parser.add_argument(
+        "command", choices=["build", "report", "build-raw", "report-raw", "experiments", "llm", "llm-report"]
+    )
+    parser.add_argument("--models", default="haiku,sonnet,qwen", help="llm: comma-separated")
+    parser.add_argument("--qwen-model", default="qwen3:4b", help="llm: Ollama model tag")
+    parser.add_argument("--max-requests", type=int, default=1000, help="llm: per model, per run")
+    parser.add_argument("--confirm", action="store_true", help="llm: actually send (default: dry run)")
     parser.add_argument("--split", choices=["dev", "test"], default="dev")
     parser.add_argument("--limit", type=int, default=None, help="answerable questions")
     parser.add_argument("--negatives", type=int, default=None, help="per negative kind")
@@ -67,6 +73,8 @@ def main() -> None:
         print(f"building raw material: {len(examples)} answerable + {len(negatives)} unanswerable ({args.split})")
         raw.save(raw.build(examples + negatives, MODEL, RERANKER), raw_cache)
         print(f"saved {raw_cache}")
+    elif args.command in ("llm", "llm-report"):
+        run_llm(args, raw.load(raw_cache), OUT / "llm" / name)
     elif args.command == "experiments":
         run_experiments(raw.load(raw_cache), OUT / "results" / f"{name}_experiments")
     elif args.command == "report-raw":
@@ -138,6 +146,54 @@ def report(records: Sequence[candidates.QuestionRecord], out: Path) -> None:
                 print(f"<={target:4.0%} ", end="")
                 _print_row(max(fits, key=lambda r: r.answer_kept))
     print(f"\nCSV files in {out}")
+
+
+def run_llm(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path) -> None:
+    from . import llm_clients, llm_eval
+
+    tasks = llm_eval.build_tasks(raws, args.limit or 100, args.negatives or 50)
+    per_condition: dict[str, int] = {}
+    for t in tasks:
+        per_condition[f"{t.kind}/{t.condition}"] = per_condition.get(f"{t.kind}/{t.condition}", 0) + 1
+    print(f"{len(tasks)} prompts: " + ", ".join(f"{k} {v}" for k, v in per_condition.items()))
+
+    def client(model: str) -> llm_clients.LLMClient:
+        if model == "qwen":
+            return llm_clients.OllamaClient(args.qwen_model)
+        return llm_clients.ClaudeClient(model)
+
+    for model in args.models.split(","):
+        cache = llm_eval.ResponseCache(out / f"{model}.jsonl")
+        if args.command == "llm":
+            prices = (0.0, 0.0) if model == "qwen" else llm_clients.CLAUDE_MODELS[model].price_per_mtok
+            pending = [t for t in tasks if t.task_id not in cache.done][: args.max_requests]
+            tokens_in = sum(llm_eval.estimate_tokens(t.prompt) for t in pending)
+            cost = (tokens_in * prices[0] + 20 * len(pending) * prices[1]) / 1e6
+            print(f"\n[{model}] {len(pending)} to send, ~{tokens_in:,} input tokens, est. ${cost:.2f}")
+            if not args.confirm:
+                continue
+            failures = llm_eval.run(tasks, client(model), cache, args.max_requests, workers=1 if model == "qwen" else 4)
+            print(f"[{model}] done, {failures} failures (not cached; rerun to retry)")
+        else:
+            prices = (0.0, 0.0) if model == "qwen" else llm_clients.CLAUDE_MODELS[model].price_per_mtok
+            rows = llm_eval.report(tasks, cache, model, prices)
+            if not rows:
+                print(f"\n[{model}] no responses yet")
+                continue
+            print(f"\n== {model} ==")
+            print(
+                f"{'kind/condition':28} {'n':>4} {'acc':>6} {'unknown':>7} {'in.tok':>6} {'cost$':>6} "
+                f"{'gain':>6} {'harm':>6} {'cf.adopt':>8}"
+            )
+            for r in rows:
+                print(
+                    f"{r.kind + '/' + r.condition:28} {r.n:4d} {r.accuracy:6.1%} {r.unknown_rate:7.1%} "
+                    f"{r.mean_input_tokens:6.0f} {r.cost_usd:6.3f} {r.gain:6.1%} {r.harm:6.1%} "
+                    f"{r.substitute_adopted:8.1%}"
+                )
+            sweep.write_csv(rows, out / f"{model}_report.csv")
+    if args.command == "llm" and not args.confirm:
+        print("\nDry run only: nothing was sent. Add --confirm to send.")
 
 
 def run_experiments(raws: Sequence[raw.RawQuestion], out: Path) -> None:
