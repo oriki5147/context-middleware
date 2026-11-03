@@ -9,6 +9,8 @@ import pytest
 from context_middleware import MiddlewareConfig
 from evaluation.llm_clients import Completion
 from evaluation.llm_eval import (
+    ANSWERABLE_CONDITIONS,
+    NEGATIVE_CONDITIONS,
     NO_RESULTS,
     ResponseCache,
     answer_type,
@@ -83,15 +85,18 @@ def test_build_tasks_conditions() -> None:
     for t in tasks:
         by_q.setdefault((t.qid, t.kind), []).append(t.condition)
     # qid 7's answer "B" occurs in its context and "Paris" is a same-type substitute.
-    assert by_q[(7, "answerable")] == [
-        "closed_book", "oracle", "rag", "mw_bi", "mw_rerank", "mw_rerank_nb", "counterfactual",
-    ]
+    assert by_q[(7, "answerable")] == list(ANSWERABLE_CONDITIONS)
     assert "counterfactual" not in by_q[(8, "answerable")]  # "Paris" is not in its context
-    assert by_q[(9, "distractors")] == ["closed_book", "rag", "mw_rerank"]
+    assert by_q[(9, "distractors")] == list(NEGATIVE_CONDITIONS)
     cf = next(t for t in tasks if t.condition == "counterfactual")
     assert cf.substitute == "Paris" and "Paris." in cf.prompt and "B." not in cf.context
     closed = next(t for t in tasks if t.condition == "closed_book")
     assert "Search results" not in closed.prompt
+    # The open variant shares its base condition's context but not its instruction.
+    get = {t.condition: t for t in tasks if t.qid == 7}
+    assert get["mw_rerank_open"].context == get["mw_rerank"].context
+    assert '"unknown"' in get["mw_rerank"].prompt and "own knowledge" in get["mw_rerank_open"].prompt
+    assert len(get["mw_rerank_k7"].context) >= len(get["mw_rerank"].context)
 
 
 class FakeClient:

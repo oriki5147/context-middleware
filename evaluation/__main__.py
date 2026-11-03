@@ -49,7 +49,7 @@ def main() -> None:
         "command", choices=["build", "report", "build-raw", "report-raw", "experiments", "llm", "llm-report"]
     )
     parser.add_argument("--models", default="haiku,sonnet,qwen", help="llm: comma-separated")
-    parser.add_argument("--qwen-model", default="qwen3:4b", help="llm: Ollama model tag")
+    parser.add_argument("--qwen-model", default="qwen3.5:4b", help="llm: Ollama model tag")
     parser.add_argument("--max-requests", type=int, default=1000, help="llm: per model, per run")
     parser.add_argument("--confirm", action="store_true", help="llm: actually send (default: dry run)")
     parser.add_argument("--split", choices=["dev", "test"], default="dev")

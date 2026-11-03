@@ -8,10 +8,15 @@ the production selection rules and defaults):
   mw_bi          middleware, bi-encoder, best 3 sentences
   mw_rerank      middleware, reranker over the bi top-20, best 3 sentences
   mw_rerank_nb   mw_rerank plus each sentence's document neighbors
+  mw_rerank_k5/7 mw_rerank keeping the best 5 / 7 sentences (less compression)
   counterfactual mw_rerank with the answer string swapped for a same-type
                  wrong answer (evaluation-only probe of context reliance)
+  *_open         the same context under OPEN_PROMPT, which lets the model fall
+                 back on its own knowledge (diagnostic: separates "the answer
+                 was cut" from "the model refused to answer")
 Distractor-only questions (no answer in any passage) run closed_book, rag and
-mw_rerank to measure answers leaking from memory despite the instruction.
+the mw_rerank variants to measure answers leaking from memory and wrong
+answers induced by on-topic context.
 
 Accuracy follows Lost in the Middle: a normalized gold answer occurs in the
 output. Per-question comparison with closed_book separates what the context
@@ -27,7 +32,7 @@ import threading
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -46,13 +51,24 @@ CONTEXT_PROMPT = (
     'results do not contain the answer, reply "unknown".\n\n'
     "Search results:\n{context}\n\nQuestion: {question}\nAnswer:"
 )
+OPEN_PROMPT = (
+    "Write a high-quality answer for the given question. Use the provided search results "
+    "(some of which might be irrelevant) when they contain the answer; otherwise answer from "
+    "your own knowledge. Answer with a short phrase.\n\n"
+    "Search results:\n{context}\n\nQuestion: {question}\nAnswer:"
+)
 CLOSED_BOOK_PROMPT = "Answer the question with a short phrase.\n\nQuestion: {question}\nAnswer:"
 NO_RESULTS = "(no search results)"
+OPEN_SUFFIX = "_open"
+MORE_SENTENCES = {"mw_rerank_k5": 5, "mw_rerank_k7": 7}
 
 ANSWERABLE_CONDITIONS = (
     "closed_book", "oracle", "rag", "mw_bi", "mw_rerank", "mw_rerank_nb", "counterfactual",
+    "mw_rerank_k5", "mw_rerank_k7", "rag_open", "mw_rerank_open", "mw_rerank_k7_open",
 )
-NEGATIVE_CONDITIONS = ("closed_book", "rag", "mw_rerank")
+NEGATIVE_CONDITIONS = (
+    "closed_book", "rag", "mw_rerank", "mw_rerank_k7", "rag_open", "mw_rerank_open", "mw_rerank_k7_open",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +122,9 @@ def contexts(raw: RawQuestion, config: MiddlewareConfig) -> dict[str, str]:
     rerank = _middleware_sentences(raw, True, config)
     out["mw_rerank"] = "\n".join(raw.sent_text[i] for i in rerank)
     out["mw_rerank_nb"] = "\n".join(raw.sent_text[i] for i in _with_neighbors(raw, rerank))
+    for condition, k in MORE_SENTENCES.items():
+        wider = replace(config, max_sentences=k)
+        out[condition] = "\n".join(raw.sent_text[i] for i in _middleware_sentences(raw, True, wider))
     if raw.gold_doc >= 0:
         gold = [c for c in range(len(raw.chunk_text)) if raw.chunk_doc[c] == raw.gold_doc]
         title = raw.chunk_title[gold[0]] if gold else ""
@@ -200,8 +219,9 @@ def build_tasks(
                         continue  # the compressed context holds no answer to swap
                     context, substitute = planted
                 else:
-                    context = ctx[condition]
-                prompt = CONTEXT_PROMPT.format(context=context or NO_RESULTS, question=raw.question)
+                    context = ctx[condition.removesuffix(OPEN_SUFFIX)]
+                template = OPEN_PROMPT if condition.endswith(OPEN_SUFFIX) else CONTEXT_PROMPT
+                prompt = template.format(context=context or NO_RESULTS, question=raw.question)
             tasks.append(
                 Task(f"{raw.qid}:{raw.kind}:{condition}", raw.qid, raw.kind, condition, prompt, raw.answers, context, substitute)
             )
