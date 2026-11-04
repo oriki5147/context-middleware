@@ -16,7 +16,7 @@ from __future__ import annotations
 import pickle
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +28,10 @@ from context_middleware import (
     ONNXBiEncoderRetriever,
     ONNXCrossEncoderReranker,
     SelectiveSentenceCompressor,
+    TextSegment,
 )
+
+from context_middleware.compressor import Reranker
 
 from .answers import contains_answer
 from .candidates import RETRIEVAL_TOKENS, Candidates
@@ -193,6 +196,24 @@ def candidate_indices(
             seen.add(key)
             candidates.append(i)
     return np.array(candidates, dtype=np.int64), retrieved, used
+
+
+def rescore(
+    raws: Iterable[RawQuestion], reranker: Reranker, log: Callable[[str], None] = print
+) -> list[RawQuestion]:
+    """Copies of ``raws`` whose ``sent_rerank`` comes from another cross-encoder
+    (e.g. the trained answerability gate), so every report runs on it unchanged."""
+    raws = list(raws)
+    out = []
+    for n, r in enumerate(raws, 1):
+        sentences = [
+            TextSegment(f"s{i}", text, f"d{d}", title=r.chunk_title[c])
+            for i, (text, d, c) in enumerate(zip(r.sent_text, r.sent_doc.tolist(), r.sent_chunk.tolist()))
+        ]
+        out.append(replace(r, sent_rerank=reranker.score(r.question, sentences)))
+        if n % 200 == 0 or n == len(raws):
+            log(f"  {n}/{len(raws)}")
+    return out
 
 
 def save(raws: list[RawQuestion], path: Path) -> None:

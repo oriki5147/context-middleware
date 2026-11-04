@@ -3,6 +3,7 @@
     python -m evaluation report --split dev [--tag T]
     python -m evaluation build-raw  --split dev [--limit N] [--negatives N] [--tag T]
     python -m evaluation report-raw --split dev [--tag T]
+    python -m evaluation rescore-raw --split dev --reranker DIR --tag T
 
 ``build`` runs the models once (slow) and caches candidates to data/eval/;
 ``report`` sweeps selection rules over the cache (fast) and writes CSVs.
@@ -46,7 +47,7 @@ EMPTY_THRESHOLDS = {s: _GRIDS[s.rstrip("0123456789")][1] for s in sweep.SCORERS}
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "command", choices=["build", "report", "build-raw", "report-raw", "experiments", "llm", "llm-report"]
+        "command", choices=["build", "report", "build-raw", "report-raw", "experiments", "llm", "llm-report", "rescore-raw"]
     )
     parser.add_argument("--models", default="haiku,sonnet,qwen", help="llm: comma-separated")
     parser.add_argument("--qwen-model", default="qwen3.5:4b", help="llm: Ollama model tag")
@@ -57,6 +58,7 @@ def main() -> None:
     parser.add_argument("--negatives", type=int, default=None, help="per negative kind")
     parser.add_argument("--configs", nargs="*", default=None, help="chunk config names")
     parser.add_argument("--tag", default="", help="suffix for the cache/results name")
+    parser.add_argument("--reranker", type=Path, default=None, help="rescore-raw: cross-encoder model dir")
     args = parser.parse_args()
     name = args.split + (f"_{args.tag}" if args.tag else "")
     cache = OUT / f"{name}.pkl"
@@ -72,6 +74,15 @@ def main() -> None:
     if args.command == "build-raw":
         print(f"building raw material: {len(examples)} answerable + {len(negatives)} unanswerable ({args.split})")
         raw.save(raw.build(examples + negatives, MODEL, RERANKER), raw_cache)
+        print(f"saved {raw_cache}")
+    elif args.command == "rescore-raw":
+        from context_middleware import ONNXCrossEncoderReranker
+
+        if args.reranker is None or not args.tag:
+            parser.error("rescore-raw needs --reranker and --tag (the rescored cache's name)")
+        source = OUT / f"{args.split}_raw.pkl"
+        reranker = ONNXCrossEncoderReranker.from_pretrained(args.reranker, intra_op_num_threads=8)
+        raw.save(raw.rescore(raw.load(source), reranker), raw_cache)
         print(f"saved {raw_cache}")
     elif args.command in ("llm", "llm-report"):
         run_llm(args, raw.load(raw_cache), OUT / "llm" / name)

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
-from evaluation.raw import RawQuestion, derive
+from context_middleware import TextSegment
+from evaluation.raw import RawQuestion, derive, rescore
 
 f32 = np.float32
 
@@ -69,3 +72,18 @@ def test_score_overrides_change_retrieval_and_ranking() -> None:
 def test_unanswerable_kinds_have_no_answer_flags() -> None:
     c = derive(make_raw(kind="distractors", gold_doc=-1), retrieval_tokens=30)
     assert not c.gold_retrieved and not c.answer_in_retrieved
+
+
+def test_rescore_replaces_only_rerank_scores() -> None:
+    seen: list[tuple[str, list[str]]] = []
+
+    class TitleLength:
+        def score(self, query: str, segments: Sequence[TextSegment]) -> NDArray[np.float32]:
+            seen.append((query, [s.title for s in segments]))
+            return np.array([len(s.content) for s in segments], dtype=np.float32)
+
+    r = make_raw()
+    (new,) = rescore([r], TitleLength(), log=lambda _: None)
+    assert new.sent_rerank.tolist() == [float(len(t)) for t in r.sent_text]
+    assert seen == [(r.question, [r.chunk_title[c] for c in r.sent_chunk.tolist()])]
+    assert new.sent_text == r.sent_text and new.qid == r.qid

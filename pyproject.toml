@@ -20,6 +20,8 @@ ingest = ["markitdown[all]>=0.1"]
 quantize = ["onnx>=1.16"]
 # Level 2 evaluation only (evaluation/llm_clients.py); local Qwen needs Ollama.
 llm = ["anthropic>=2.3"]
+# Offline gate training only (evaluation/train_gate.py); the product never imports these.
+train = ["torch>=2.9", "transformers>=5"]
 dev = ["pytest>=8", "mypy>=1.10"]
 
 [tool.hatch.build.targets.wheel]
