@@ -4,6 +4,7 @@
     python -m evaluation build-raw  --split dev [--limit N] [--negatives N] [--tag T]
     python -m evaluation report-raw --split dev [--tag T]
     python -m evaluation rescore-raw --split dev --reranker DIR --tag T
+    python -m evaluation rank-judge --split dev [--limit N] [--models haiku,sonnet] [--confirm]
 
 ``build`` runs the models once (slow) and caches candidates to data/eval/;
 ``report`` sweeps selection rules over the cache (fast) and writes CSVs.
@@ -47,7 +48,7 @@ EMPTY_THRESHOLDS = {s: _GRIDS[s.rstrip("0123456789")][1] for s in sweep.SCORERS}
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "command", choices=["build", "report", "build-raw", "report-raw", "experiments", "llm", "llm-report", "rescore-raw"]
+        "command", choices=["build", "report", "build-raw", "report-raw", "experiments", "llm", "llm-report", "rescore-raw", "rank-judge"]
     )
     parser.add_argument("--models", default="haiku,sonnet,qwen", help="llm: comma-separated")
     parser.add_argument("--qwen-model", default="qwen3.5:4b", help="llm: Ollama model tag")
@@ -84,6 +85,8 @@ def main() -> None:
         reranker = ONNXCrossEncoderReranker.from_pretrained(args.reranker, intra_op_num_threads=8)
         raw.save(raw.rescore(raw.load(source), reranker), raw_cache)
         print(f"saved {raw_cache}")
+    elif args.command == "rank-judge":
+        run_rank_judge(args, raw.load(raw_cache), OUT / "llm" / name)
     elif args.command in ("llm", "llm-report"):
         run_llm(args, raw.load(raw_cache), OUT / "llm" / name)
     elif args.command == "experiments":
@@ -205,6 +208,37 @@ def run_llm(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path
             sweep.write_csv(rows, out / f"{model}_report.csv")
     if args.command == "llm" and not args.confirm:
         print("\nDry run only: nothing was sent. Add --confirm to send.")
+
+
+def run_rank_judge(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path) -> None:
+    from . import llm_clients, llm_eval, rank_judge
+
+    tasks = rank_judge.build_tasks(raws, args.limit or 300)
+    models = [m for m in args.models.split(",") if m in llm_clients.CLAUDE_MODELS]
+    judges = {m: llm_eval.ResponseCache(out / f"rank_judge_{m}.jsonl") for m in models}
+    for model, cache in judges.items():
+        pending = [t for t in tasks if t.task_id not in cache.done][: args.max_requests]
+        prices = llm_clients.CLAUDE_MODELS[model].price_per_mtok
+        # Real Claude token counts ran ~2x the chars/4 estimate in the Level 2 pilot.
+        tokens_in = 2 * sum(llm_eval.estimate_tokens(t.prompt) for t in pending)
+        cost = (tokens_in * prices[0] + 20 * len(pending) * prices[1]) / 1e6
+        print(f"[{model}] {len(pending)} to send, ~{tokens_in:,} input tokens, est. ${cost:.2f}")
+        if args.confirm and pending:
+            failures = llm_eval.run(tasks, llm_clients.ClaudeClient(model), cache, args.max_requests)
+            print(f"[{model}] done, {failures} failures (not cached; rerun to retry)")
+    if not args.confirm:
+        print("Dry run only: nothing was sent. Add --confirm to send.")
+        return
+    rescored = {"rerank": raws}
+    gate_cache = OUT / f"{args.split}_gate_raw.pkl"
+    if gate_cache.exists():
+        rescored["gate"] = raw.load(gate_cache)
+    closed = {m: llm_eval.ResponseCache(out / f"{m}.jsonl") for m in models}
+    rows = rank_judge.report(raws, rescored, judges, closed, tasks)
+    print(f"\n{'subset':28} {'scorer':8} {'n':>4} {'rank1':>6} {'top3':>6}")
+    for r in rows:
+        print(f"{r.subset:28} {r.scorer:8} {r.n:4d} {r.rank1:6.1%} {r.top3:6.1%}")
+    sweep.write_csv(rows, out / "rank_judge_report.csv")
 
 
 def run_experiments(raws: Sequence[raw.RawQuestion], out: Path) -> None:
