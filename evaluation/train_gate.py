@@ -70,7 +70,11 @@ def export(hf_dir: Path = OUT / "hf", out_dir: Path = OUT) -> Path:
     from context_middleware.quantization import quantize_int8
 
     # FP32 even when the checkpoint is stored in FP16: INT8 quantization needs FP32 scales.
-    model = AutoModelForSequenceClassification.from_pretrained(hf_dir, dtype=torch.float32).eval()
+    # Eager attention: the SDPA path exports mask-building ops that made the INT8
+    # MiniLM ~1.7x slower on CPU (49 vs 28 ms per 20 sentences).
+    model = AutoModelForSequenceClassification.from_pretrained(
+        hf_dir, dtype=torch.float32, attn_implementation="eager"
+    ).eval()
     tokenizer = AutoTokenizer.from_pretrained(hf_dir)
     sample = dict(tokenizer(["a question"], ["a sentence"], return_tensors="pt"))
     # XLM-R style models (e.g. bge-reranker) take no token_type_ids.
