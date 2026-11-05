@@ -47,14 +47,17 @@ def shown_order(raw: RawQuestion, top_n: int = 20) -> list[int]:
     return random.Random(raw.qid).sample(items, len(items))
 
 
+def format_prompt(question: str, sentences: Sequence[tuple[str, str]]) -> str:
+    """The judge prompt over (title, sentence) pairs, numbered from 1 in the given order."""
+    lines = "\n".join(f"[{n}] ({title}) {text}" for n, (title, text) in enumerate(sentences, 1))
+    return PROMPT.format(question=question, sentences=lines)
+
+
 def build_tasks(raws: Sequence[RawQuestion], limit: int, top_n: int = 20) -> list[Task]:
     tasks = []
     for raw in [r for r in raws if r.kind == "answerable"][:limit]:
-        order = shown_order(raw, top_n)
-        lines = "\n".join(
-            f"[{n}] ({raw.chunk_title[raw.sent_chunk[i]]}) {raw.sent_text[i]}" for n, i in enumerate(order, 1)
-        )
-        prompt = PROMPT.format(question=raw.question, sentences=lines)
+        shown = [(raw.chunk_title[raw.sent_chunk[i]], raw.sent_text[i]) for i in shown_order(raw, top_n)]
+        prompt = format_prompt(raw.question, shown)
         tasks.append(Task(f"{raw.qid}:{raw.kind}:{CONDITION}", raw.qid, raw.kind, CONDITION, prompt, raw.answers))
     return tasks
 
