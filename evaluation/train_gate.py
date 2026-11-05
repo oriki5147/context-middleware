@@ -69,10 +69,13 @@ def export(hf_dir: Path = OUT / "hf", out_dir: Path = OUT) -> Path:
 
     from context_middleware.quantization import quantize_int8
 
-    model = AutoModelForSequenceClassification.from_pretrained(hf_dir).eval()
+    # FP32 even when the checkpoint is stored in FP16: INT8 quantization needs FP32 scales.
+    model = AutoModelForSequenceClassification.from_pretrained(hf_dir, dtype=torch.float32).eval()
     tokenizer = AutoTokenizer.from_pretrained(hf_dir)
     sample = dict(tokenizer(["a question"], ["a sentence"], return_tensors="pt"))
-    names = ["input_ids", "attention_mask", "token_type_ids"]
+    # XLM-R style models (e.g. bge-reranker) take no token_type_ids.
+    names = [n for n in ("input_ids", "attention_mask", "token_type_ids") if n in sample]
+    out_dir.mkdir(parents=True, exist_ok=True)
     axes = {n: {0: "batch", 1: "sequence"} for n in names}
     torch.onnx.export(
         model, (), str(out_dir / "model.onnx"), kwargs={n: sample[n] for n in names},

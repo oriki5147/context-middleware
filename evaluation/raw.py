@@ -198,16 +198,26 @@ def candidate_indices(
     return np.array(candidates, dtype=np.int64), retrieved, used
 
 
+def with_context(r: RawQuestion, i: int) -> str:
+    """Sentence i followed by its document neighbors, as train_distill's --context saw them."""
+    same = r.sent_doc[i]
+    prev = r.sent_text[i - 1] if i > 0 and r.sent_doc[i - 1] == same else ""
+    nxt = r.sent_text[i + 1] if i + 1 < len(r.sent_text) and r.sent_doc[i + 1] == same else ""
+    around = " ... ".join(s for s in (prev, nxt) if s)
+    return f"{r.sent_text[i]}\nContext: {around}" if around else r.sent_text[i]
+
+
 def rescore(
-    raws: Iterable[RawQuestion], reranker: Reranker, log: Callable[[str], None] = print
+    raws: Iterable[RawQuestion], reranker: Reranker, log: Callable[[str], None] = print, context: bool = False
 ) -> list[RawQuestion]:
     """Copies of ``raws`` whose ``sent_rerank`` comes from another cross-encoder
-    (e.g. the trained answerability gate), so every report runs on it unchanged."""
+    (e.g. the trained answerability gate), so every report runs on it unchanged.
+    With ``context``, each sentence is scored together with its neighbors."""
     raws = list(raws)
     out = []
     for n, r in enumerate(raws, 1):
         sentences = [
-            TextSegment(f"s{i}", text, f"d{d}", title=r.chunk_title[c])
+            TextSegment(f"s{i}", with_context(r, i) if context else text, f"d{d}", title=r.chunk_title[c])
             for i, (text, d, c) in enumerate(zip(r.sent_text, r.sent_doc.tolist(), r.sent_chunk.tolist()))
         ]
         out.append(replace(r, sent_rerank=reranker.score(r.question, sentences)))

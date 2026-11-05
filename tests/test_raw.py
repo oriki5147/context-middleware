@@ -87,3 +87,16 @@ def test_rescore_replaces_only_rerank_scores() -> None:
     assert new.sent_rerank.tolist() == [float(len(t)) for t in r.sent_text]
     assert seen == [(r.question, [r.chunk_title[c] for c in r.sent_chunk.tolist()])]
     assert new.sent_text == r.sent_text and new.qid == r.qid
+
+
+def test_with_context_matches_the_training_format() -> None:
+    from evaluation.raw import with_context
+    from evaluation.train_distill import sentence_text
+
+    r = make_raw()
+    for i in range(len(r.sent_text)):
+        title = r.chunk_title[r.sent_chunk[i]]
+        same = r.sent_doc[i]
+        prev = r.sent_text[i - 1] if i > 0 and r.sent_doc[i - 1] == same else ""
+        nxt = r.sent_text[i + 1] if i + 1 < len(r.sent_text) and r.sent_doc[i + 1] == same else ""
+        assert f"{title}\n{with_context(r, i)}" == sentence_text(title, r.sent_text[i], prev, nxt, context=True)

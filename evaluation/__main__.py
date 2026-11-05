@@ -3,7 +3,7 @@
     python -m evaluation report --split dev [--tag T]
     python -m evaluation build-raw  --split dev [--limit N] [--negatives N] [--tag T]
     python -m evaluation report-raw --split dev [--tag T]
-    python -m evaluation rescore-raw --split dev --reranker DIR --tag T
+    python -m evaluation rescore-raw --split dev --reranker DIR --tag T [--context]
     python -m evaluation rank-judge --split dev [--limit N] [--models haiku,sonnet] [--confirm]
 
 ``build`` runs the models once (slow) and caches candidates to data/eval/;
@@ -60,6 +60,7 @@ def main() -> None:
     parser.add_argument("--configs", nargs="*", default=None, help="chunk config names")
     parser.add_argument("--tag", default="", help="suffix for the cache/results name")
     parser.add_argument("--reranker", type=Path, default=None, help="rescore-raw: cross-encoder model dir")
+    parser.add_argument("--context", action="store_true", help="rescore-raw: score sentences with their neighbors")
     args = parser.parse_args()
     name = args.split + (f"_{args.tag}" if args.tag else "")
     cache = OUT / f"{name}.pkl"
@@ -83,7 +84,7 @@ def main() -> None:
             parser.error("rescore-raw needs --reranker and --tag (the rescored cache's name)")
         source = OUT / f"{args.split}_raw.pkl"
         reranker = ONNXCrossEncoderReranker.from_pretrained(args.reranker, intra_op_num_threads=8)
-        raw.save(raw.rescore(raw.load(source), reranker), raw_cache)
+        raw.save(raw.rescore(raw.load(source), reranker, context=args.context), raw_cache)
         print(f"saved {raw_cache}")
     elif args.command == "rank-judge":
         run_rank_judge(args, raw.load(raw_cache), OUT / "llm" / name)

@@ -9,6 +9,7 @@ processed server-side: the machine may sleep until ``fetch``), and ``fetch``
 stores the replies next to the shortlists.
 
     python -m evaluation.distill build
+    python -m evaluation.distill context   # neighbors of each shortlisted sentence
     python -m evaluation.distill submit [--model haiku] [--confirm]
     python -m evaluation.distill status | fetch
 """
@@ -95,6 +96,38 @@ def build(
             log(f"  {group + 1}/{len(records)}")
 
 
+def neighbor_context(
+    records: Sequence[dict[str, Any]],
+    shortlists: Sequence[Shortlist],
+    preprocessor: MarkItDownPreprocessor,
+    splitter: SelectiveSentenceCompressor,
+    *,
+    positives: int = 3,
+    hard: int = 12,
+    log: Any = print,
+) -> Iterator[dict[str, Any]]:
+    """Each shortlisted sentence's previous and next sentence in its passage
+    ("" at a passage edge), re-split exactly as ``build`` split them."""
+    for n, item in enumerate(shortlists, 1):
+        record = records[item.group]
+        passages = record["positive_ctxs"][:positives] + record["hard_negative_ctxs"][:hard]
+        chunks = [
+            chunk
+            for j, ctx in enumerate(passages)
+            for chunk in preprocessor.chunk(str(ctx["text"]), f"d{j}", title=str(ctx["title"]))
+        ]
+        sentences = splitter.split(chunks)
+        around: dict[tuple[str, str], tuple[str, str]] = {}
+        for i, s in enumerate(sentences):
+            prev = sentences[i - 1].content if i > 0 and sentences[i - 1].source_doc == s.source_doc else ""
+            nxt = sentences[i + 1].content if i + 1 < len(sentences) and sentences[i + 1].source_doc == s.source_doc else ""
+            around.setdefault((s.title, s.content), (prev, nxt))
+        pairs = [around.get(key, ("", "")) for key in zip(item.titles, item.texts)]
+        yield {"group": item.group, "prev": [p for p, _ in pairs], "next": [x for _, x in pairs]}
+        if n % 500 == 0:
+            log(f"  {n}/{len(shortlists)}")
+
+
 def write_jsonl(items: Iterable[Shortlist], path: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
@@ -116,7 +149,7 @@ def custom_id(item: Shortlist) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["build", "submit", "status", "fetch"])
+    parser.add_argument("command", choices=["build", "context", "submit", "status", "fetch"])
     parser.add_argument("--model", default="haiku")
     parser.add_argument("--limit", type=int, default=None, help="build/submit: first N questions")
     parser.add_argument("--confirm", action="store_true", help="submit: actually send (default: dry run)")
@@ -130,6 +163,16 @@ def main() -> None:
         records = gate_data.load()[: args.limit]
         n = write_jsonl(build(records, encoder, preprocessor, SelectiveSentenceCompressor(encoder)), shortlists)
         print(f"saved {n} shortlists to {shortlists}")
+        return
+    if args.command == "context":
+        encoder = ONNXBiEncoderRetriever.from_pretrained(MODEL, query_prefix=BGE_QUERY_PREFIX, intra_op_num_threads=8)
+        preprocessor = MarkItDownPreprocessor.from_pretrained(MODEL, 64, 0)
+        out = OUT / "context.jsonl"
+        rows = neighbor_context(gate_data.load(), read_jsonl(shortlists), preprocessor, SelectiveSentenceCompressor(encoder))
+        with out.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(f"saved {out}")
         return
 
     from . import llm_clients
