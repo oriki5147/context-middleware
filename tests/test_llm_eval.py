@@ -161,3 +161,9 @@ def test_no_results_placeholder_in_prompt() -> None:
     tasks = build_tasks([raw], 1, 0, MiddlewareConfig(empty_threshold=0.95, rerank_empty_threshold=0.95))
     mw = next(t for t in tasks if t.condition == "mw_bi")
     assert mw.context == "" and NO_RESULTS in mw.prompt
+
+
+def test_build_tasks_offset_and_condition_subset() -> None:
+    raws = [make_raw(), make_raw(qid=8, answers=("Paris",)), make_raw(qid=9, kind="distractors", gold_doc=-1)]
+    tasks = build_tasks(raws, answerable=1, negatives=1, offset=1, only=["rag", "mw_rerank_nb"])
+    assert {(t.qid, t.condition) for t in tasks} == {(8, "rag"), (8, "mw_rerank_nb")}

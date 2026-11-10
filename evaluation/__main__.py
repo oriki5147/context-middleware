@@ -53,6 +53,8 @@ def main() -> None:
     parser.add_argument("--models", default="haiku,sonnet,qwen", help="llm: comma-separated")
     parser.add_argument("--qwen-model", default="qwen3.5:4b", help="llm: Ollama model tag")
     parser.add_argument("--max-requests", type=int, default=1000, help="llm: per model, per run")
+    parser.add_argument("--offset", type=int, default=0, help="llm: skip the first N questions of each kind")
+    parser.add_argument("--conditions", default="", help="llm: comma-separated subset of conditions")
     parser.add_argument("--confirm", action="store_true", help="llm: actually send (default: dry run)")
     parser.add_argument("--split", choices=["dev", "test"], default="dev")
     parser.add_argument("--limit", type=int, default=None, help="answerable questions")
@@ -166,7 +168,8 @@ def report(records: Sequence[candidates.QuestionRecord], out: Path) -> None:
 def run_llm(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path) -> None:
     from . import llm_clients, llm_eval
 
-    tasks = llm_eval.build_tasks(raws, args.limit or 100, args.negatives or 50)
+    only = [c for c in args.conditions.split(",") if c] or None
+    tasks = llm_eval.build_tasks(raws, args.limit or 100, args.negatives or 50, offset=args.offset, only=only)
     per_condition: dict[str, int] = {}
     for t in tasks:
         per_condition[f"{t.kind}/{t.condition}"] = per_condition.get(f"{t.kind}/{t.condition}", 0) + 1

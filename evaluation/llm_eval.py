@@ -68,6 +68,7 @@ ANSWERABLE_CONDITIONS = (
 )
 NEGATIVE_CONDITIONS = (
     "closed_book", "rag", "mw_rerank", "mw_rerank_k7", "rag_open", "mw_rerank_open", "mw_rerank_k7_open",
+    "mw_rerank_nb",
 )
 
 
@@ -194,11 +195,19 @@ def plant_counterfactual(
 
 
 def build_tasks(
-    raws: Sequence[RawQuestion], answerable: int, negatives: int, config: MiddlewareConfig | None = None
+    raws: Sequence[RawQuestion],
+    answerable: int,
+    negatives: int,
+    config: MiddlewareConfig | None = None,
+    *,
+    offset: int = 0,
+    only: Sequence[str] | None = None,
 ) -> list[Task]:
+    """Tasks for questions ``offset .. offset+answerable`` (and likewise for the
+    distractor-only negatives), restricted to the ``only`` conditions if given."""
     config = config or MiddlewareConfig()
-    pos = [r for r in raws if r.kind == "answerable"][:answerable]
-    neg = [r for r in raws if r.kind == "distractors"][:negatives]
+    pos = [r for r in raws if r.kind == "answerable"][offset : offset + answerable]
+    neg = [r for r in raws if r.kind == "distractors"][offset : offset + negatives]
     pools: dict[str, list[str]] = defaultdict(list)
     for r in raws:
         if r.kind == "answerable" and r.answers:
@@ -208,6 +217,8 @@ def build_tasks(
         ctx = contexts(raw, config)
         conditions = ANSWERABLE_CONDITIONS if raw.kind == "answerable" else NEGATIVE_CONDITIONS
         for condition in conditions:
+            if only is not None and condition not in only:
+                continue
             substitute = ""
             if condition == "closed_book":
                 context, prompt = "", CLOSED_BOOK_PROMPT.format(question=raw.question)
