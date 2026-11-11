@@ -36,14 +36,24 @@ class MiddlewareConfig:
     max_sentences: int | None = 3
     sentence_threshold: float | None = None
     min_sentences: int = 1
-    # Empty context when even the best sentence scores <= the threshold of
-    # the active scorer. This reliably catches off-topic queries, NOT on-topic
-    # queries whose answer is absent. Calibrated for bge-small-en-v1.5 INT8
-    # and ms-marco-MiniLM-L6-v2 INT8; recalibrate when changing models.
+    # Empty context when even the best sentence's bi-encoder score is
+    # <= empty_threshold, or, with a reranker, when its best score is
+    # <= rerank_empty_threshold. The bi-encoder rule is the one that catches
+    # off-topic queries (399 of 400 on NQ dev, no answerable question lost);
+    # neither catches on-topic queries whose answer is absent. Calibrated for
+    # bge-small-en-v1.5 INT8 and the distilled context reranker (INT8);
+    # recalibrate when changing models.
     empty_threshold: float = 0.64
     rerank_empty_threshold: float = 0.01
     # Optional cross-encoder stage: rerank the bi-encoder's top-N sentences.
     rerank_top_n: int = 20
+    # The reranker reads each shortlisted sentence with its previous and next
+    # sentence in the document, the input the distilled context reranker
+    # (evaluation/train_distill.py --context) is trained on: answer sentence
+    # in the top 3 for 61.3% of NQ dev questions, vs 52.8% for
+    # ms-marco-MiniLM-L6-v2 on single sentences. Set False for off-the-shelf
+    # cross-encoders.
+    rerank_context: bool = True
     # Token budget for the final context, filled best sentence first.
     max_context_tokens: int | None = None
     budget_strategy: BudgetStrategy = BudgetStrategy.FILL

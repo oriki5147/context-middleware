@@ -30,6 +30,8 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
+from context_middleware.compressor import with_neighbors
+
 from . import distill
 from .rank_judge import parse_ranking
 from .train_gate import BASE, export
@@ -39,11 +41,9 @@ PICK_WEIGHTS = (0.6, 0.25, 0.15)
 
 def sentence_text(title: str, text: str, prev: str = "", nxt: str = "", context: bool = False) -> str:
     """Reranker input: the production "title\\nsentence", plus neighbors when ``context``."""
-    base = f"{title}\n{text}" if title else text
-    if not context:
-        return base
-    around = " ... ".join(s for s in (prev, nxt) if s)
-    return f"{base}\nContext: {around}" if around else base
+    if context:
+        text = with_neighbors(text, prev, nxt)
+    return f"{title}\n{text}" if title else text
 
 
 @dataclass(frozen=True, slots=True)

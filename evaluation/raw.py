@@ -31,7 +31,7 @@ from context_middleware import (
     TextSegment,
 )
 
-from context_middleware.compressor import Reranker
+from context_middleware.compressor import Reranker, with_neighbors
 
 from .answers import contains_answer
 from .candidates import RETRIEVAL_TOKENS, Candidates
@@ -199,12 +199,11 @@ def candidate_indices(
 
 
 def with_context(r: RawQuestion, i: int) -> str:
-    """Sentence i followed by its document neighbors, as train_distill's --context saw them."""
+    """Sentence i followed by its document neighbors, as the compressor's rerank_context shows it."""
     same = r.sent_doc[i]
     prev = r.sent_text[i - 1] if i > 0 and r.sent_doc[i - 1] == same else ""
     nxt = r.sent_text[i + 1] if i + 1 < len(r.sent_text) and r.sent_doc[i + 1] == same else ""
-    around = " ... ".join(s for s in (prev, nxt) if s)
-    return f"{r.sent_text[i]}\nContext: {around}" if around else r.sent_text[i]
+    return with_neighbors(r.sent_text[i], prev, nxt)
 
 
 def rescore(

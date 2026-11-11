@@ -6,10 +6,14 @@ own encoder (title-prefixed, as RECOMP does for decontextualization).
 
 With an optional cross-encoder ``reranker``, the bi-encoder only shortlists
 the top ``rerank_top_n`` sentences, and selection runs on reranker scores.
+With ``rerank_context`` the reranker reads each shortlisted sentence together
+with its previous and next sentence in the document; the output is still the
+sentence alone.
 
-Thresholds are on the active scorer's scale (bi-encoder inner product, or
+Thresholds are on their scorer's scale (bi-encoder inner product, or
 reranker probability), so they are model-specific and must be calibrated on
-data; defaults are calibrated for bge-small-en-v1.5 and ms-marco-MiniLM-L6-v2 (INT8).
+data; defaults are calibrated for bge-small-en-v1.5 and the distilled context
+reranker (INT8).
 """
 
 from __future__ import annotations
@@ -49,6 +53,14 @@ def select_sentences(
     return [int(i) for i in order[:keep]]
 
 
+def with_neighbors(sentence: str, previous: str, following: str) -> str:
+    """Reranker input under ``rerank_context``: the sentence, then its document
+    neighbors ("" for a missing one). The context reranker is trained on
+    exactly this format (evaluation/train_distill.py)."""
+    around = " ... ".join(s for s in (previous, following) if s)
+    return f"{sentence}\nContext: {around}" if around else sentence
+
+
 class SegmentEncoder(Protocol):
     """What the compressor needs from ``ONNXBiEncoderRetriever``."""
 
@@ -72,6 +84,8 @@ class SelectiveSentenceCompressor:
         sentence_splitter: SentenceSplitter | None = None,
         reranker: Reranker | None = None,
         rerank_top_n: int = 20,
+        rerank_empty_threshold: float = 0.01,
+        rerank_context: bool = True,
     ) -> None:
         if min_sentences < 0:
             raise ValueError("min_sentences must be non-negative")
@@ -86,25 +100,44 @@ class SelectiveSentenceCompressor:
         self.max_sentences = max_sentences
         self.reranker = reranker
         self.rerank_top_n = rerank_top_n
+        self.rerank_empty_threshold = rerank_empty_threshold
+        self.rerank_context = rerank_context
         self._split = sentence_splitter or pysbd_splitter()
         # Ingest-time caches (see precompute): sentence texts per chunk, and
         # bi-encoder embeddings per (title, sentence). Pure optimizations:
         # anything missing is computed on demand with identical results.
         self._chunk_sentences: dict[tuple[str, str], list[str]] = {}
         self._embeddings: dict[tuple[str, str], NDArray[np.float32]] = {}
+        # Ingest-time index for rerank_context: (previous, next) sentence per
+        # (document, sentence). Not recomputable at query time, when only the
+        # retrieved chunks are seen: a sentence missing here is reranked alone.
+        self._around: dict[tuple[str, str], tuple[str, str]] = {}
 
     def precompute(self, chunks: Sequence[TextSegment]) -> None:
         """Split and embed ``chunks``' sentences ahead of queries (call at ingest).
 
         Moves sentence segmentation and embedding, the bulk of compress()'s
         cost, out of the query path; only the optional reranker then runs per
-        query.
+        query. Also records each sentence's document neighbors for
+        ``rerank_context``, so pass a document's chunks together, in order.
         """
-        self._embed(self.split(chunks))
+        sentences = self.split(chunks)
+        self._embed(sentences)
+        for i, s in enumerate(sentences):
+            before = sentences[i - 1] if i > 0 else None
+            after = sentences[i + 1] if i + 1 < len(sentences) else None
+            self._around.setdefault(
+                (s.source_doc, s.content),
+                (
+                    before.content if before is not None and before.source_doc == s.source_doc else "",
+                    after.content if after is not None and after.source_doc == s.source_doc else "",
+                ),
+            )
 
     def clear_cache(self) -> None:
         self._chunk_sentences.clear()
         self._embeddings.clear()
+        self._around.clear()
 
     def compress(
         self, query_embedding: Embedding, chunks: Sequence[TextSegment], query: str | None = None
@@ -115,8 +148,12 @@ class SelectiveSentenceCompressor:
         the engine embeds the query once for both retrieval and compression.
         ``query`` (the text) is required only when a reranker is configured.
 
-        - If even the best sentence scores ``<= empty_threshold``, return ``[]``
-          (selective augmentation: let the LLM answer from parametric knowledge).
+        - If even the best sentence's bi-encoder score is ``<= empty_threshold``,
+          return ``[]`` (selective augmentation: let the LLM answer from
+          parametric knowledge). This is the off-topic rule; with a reranker it
+          runs first, so such queries never pay for reranking.
+        - With a reranker, also return ``[]`` when its best score is
+          ``<= rerank_empty_threshold``.
         - Otherwise keep the best ``max_sentences``; with a ``sentence_threshold``,
           drop those below it, keeping at least the top ``min_sentences``.
         """
@@ -124,16 +161,20 @@ class SelectiveSentenceCompressor:
         if not sentences:
             return []
         scores = self._embed(sentences) @ query_embedding
+        empty_threshold = self.empty_threshold
         if self.reranker is not None:
             if query is None:
                 raise ValueError("compress() needs the query text when a reranker is set")
+            if scores.max() <= self.empty_threshold:
+                return []
             shortlist = np.argsort(-scores, kind="stable")[: self.rerank_top_n]
             sentences = [sentences[i] for i in shortlist]
-            scores = self.reranker.score(query, sentences)
+            scores = self.reranker.score(query, self._in_context(sentences) if self.rerank_context else sentences)
+            empty_threshold = self.rerank_empty_threshold
         kept = select_sentences(
             scores,
             self.sentence_threshold,
-            self.empty_threshold,
+            empty_threshold,
             self.min_sentences,
             self.max_sentences,
         )
@@ -161,6 +202,13 @@ class SelectiveSentenceCompressor:
                     )
                 )
         return sentences
+
+    def _in_context(self, sentences: Sequence[TextSegment]) -> list[TextSegment]:
+        """Copies for the reranker to read: each sentence with its document neighbors."""
+        return [
+            replace(s, content=with_neighbors(s.content, *self._around.get((s.source_doc, s.content), ("", ""))))
+            for s in sentences
+        ]
 
     def _sentences_of(self, chunk: TextSegment) -> list[str]:
         key = (chunk.segment_id, chunk.content)

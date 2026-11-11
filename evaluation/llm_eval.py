@@ -92,6 +92,8 @@ def _middleware_sentences(raw: RawQuestion, use_reranker: bool, config: Middlewa
     idx, _, _ = candidate_indices(raw)
     bi = raw.sent_embedding[idx] @ raw.query_embedding
     if use_reranker:
+        if bi.max() <= config.empty_threshold:  # the off-topic rule runs before reranking
+            return []
         shortlist = idx[np.argsort(-bi, kind="stable")[: config.rerank_top_n]]
         scores, pool, empty = raw.sent_rerank[shortlist], shortlist, config.rerank_empty_threshold
     else:

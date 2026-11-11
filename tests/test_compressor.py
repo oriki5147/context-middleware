@@ -148,10 +148,44 @@ def test_reranker_rescores_bi_encoder_shortlist_only() -> None:
     assert kept[0].score == pytest.approx(0.9)
 
 
-def test_reranker_scores_drive_the_empty_rule() -> None:
+def test_reranker_scores_have_their_own_empty_threshold() -> None:
     reranker = FakeReranker({"A.": 0.01, "B.": 0.02, "C.": 0.03, "D.": 0.0})
-    compressor = make(reranker=reranker, sentence_threshold=0.5, empty_threshold=0.05)
+    compressor = make(reranker=reranker, sentence_threshold=0.5, rerank_empty_threshold=0.05)
     assert compressor.compress(Q, CHUNKS, "q") == []
+    assert reranker.seen
+
+
+def test_bi_encoder_empty_rule_runs_before_the_reranker() -> None:
+    # Best bi-encoder score is 0.9: off-topic by that rule, so nothing is reranked.
+    reranker = FakeReranker({"A.": 0.9, "B.": 0.9, "C.": 0.9, "D.": 0.9})
+    compressor = make(reranker=reranker, empty_threshold=0.95)
+    assert compressor.compress(Q, CHUNKS, "q") == []
+    assert reranker.seen == []
+
+
+def test_rerank_context_shows_the_reranker_document_neighbors() -> None:
+    # Documents: "doc" = C. A. D. B. and "other" = E.
+    chunks = [*CHUNKS, chunk("other#0", "E.", source_doc="other")]
+    in_context = {
+        "C.\nContext: A.": 0.1, "A.\nContext: C. ... D.": 0.9, "D.\nContext: A. ... B.": 0.2,
+        "B.\nContext: D.": 0.3, "E.": 0.4,
+    }
+    reranker = FakeReranker(in_context)
+    compressor = make(reranker=reranker, sentence_threshold=None, max_sentences=2, empty_threshold=-1.0)
+    compressor.precompute(chunks)
+    kept = compressor.compress(Q, chunks[::-1], "q")  # retrieval order is not document order
+    assert sorted(reranker.seen) == sorted(in_context)
+    assert [s.content for s in kept] == ["A.", "E."]  # the output stays the sentence alone
+
+
+def test_rerank_context_needs_precompute_and_can_be_turned_off() -> None:
+    plain = {"A.": 0.9, "B.": 0.1, "C.": 0.1, "D.": 0.1}
+    reranker = FakeReranker(plain)
+    make(reranker=reranker).compress(Q, CHUNKS, "q")  # nothing ingested: no neighbors known
+    off = make(reranker=reranker, rerank_context=False)
+    off.precompute(CHUNKS)
+    off.compress(Q, CHUNKS, "q")
+    assert sorted(reranker.seen) == sorted([*plain, *plain])
 
 
 def test_reranker_requires_query_text() -> None:
