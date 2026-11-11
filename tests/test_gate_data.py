@@ -58,3 +58,19 @@ def test_jsonl_round_trip(tmp_path: Path) -> None:
     pairs = [Pair(1, "q", "t\ns", 1, "answer"), Pair(1, "q", "t\nn", 0, "hard")]
     assert write_jsonl(pairs, tmp_path / "p.jsonl") == 2
     assert read_jsonl(tmp_path / "p.jsonl") == pairs
+
+
+def test_iter_records_streams_and_trims_passages(tmp_path: Path) -> None:
+    import gzip
+    import json
+
+    from evaluation.gate_data import iter_records
+
+    ctx = [{"title": f"t{i}", "text": f"p{i}", "score": 1.5} for i in range(5)]
+    records = [{"question": "q", "answers": ["a"], "positive_ctxs": ctx, "hard_negative_ctxs": ctx, "negative_ctxs": ctx}] * 2
+    path = tmp_path / "r.json.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        json.dump(records, f)
+    out = list(iter_records(path, positives=1, hard=3))
+    assert len(out) == 2
+    assert out[0] == {"question": "q", "answers": ["a"], "positive_ctxs": ctx[:1], "hard_negative_ctxs": ctx[:3]}

@@ -12,6 +12,9 @@ stores the replies next to the shortlists.
     python -m evaluation.distill context   # neighbors of each shortlisted sentence
     python -m evaluation.distill submit [--model haiku] [--confirm]
     python -m evaluation.distill status | fetch
+
+``--source train`` does the same for DPR's NQ train questions (streamed,
+first ``--limit``), under data/distill/train/; training reads both.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import json
 import random
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +44,11 @@ from .rank_judge import format_prompt
 
 MODEL = Path("models/bge-small-en-v1.5")
 OUT = Path("data/distill")
+POSITIVES, HARD = 3, 12  # DPR passages per question: gold, then BM25 hard negatives
+SOURCES = {
+    "dev": (gate_data.DEFAULT_PATH, gate_data.URL, OUT),
+    "train": (gate_data.TRAIN_PATH, gate_data.TRAIN_URL, OUT / "train"),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,8 +72,8 @@ def build(
     preprocessor: MarkItDownPreprocessor,
     splitter: SelectiveSentenceCompressor,
     *,
-    positives: int = 3,
-    hard: int = 12,
+    positives: int = POSITIVES,
+    hard: int = HARD,
     top_n: int = 20,
     log: Any = print,
 ) -> Iterator[Shortlist]:
@@ -102,8 +111,8 @@ def neighbor_context(
     preprocessor: MarkItDownPreprocessor,
     splitter: SelectiveSentenceCompressor,
     *,
-    positives: int = 3,
-    hard: int = 12,
+    positives: int = POSITIVES,
+    hard: int = HARD,
     log: Any = print,
 ) -> Iterator[dict[str, Any]]:
     """Each shortlisted sentence's previous and next sentence in its passage
@@ -143,6 +152,12 @@ def read_jsonl(path: Path) -> list[Shortlist]:
         return [Shortlist(**json.loads(line)) for line in f]
 
 
+def load_records(source: str, limit: int | None = None) -> list[dict[str, Any]]:
+    path, url, _ = SOURCES[source]
+    records = gate_data.iter_records(gate_data.download(path, url), positives=POSITIVES, hard=HARD)
+    return list(islice(records, limit))
+
+
 def custom_id(item: Shortlist) -> str:
     return f"q{item.group}"
 
@@ -151,24 +166,28 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["build", "context", "submit", "status", "fetch"])
     parser.add_argument("--model", default="haiku")
+    parser.add_argument("--source", choices=sorted(SOURCES), default="dev", help="DPR question file")
     parser.add_argument("--limit", type=int, default=None, help="build/submit: first N questions")
     parser.add_argument("--confirm", action="store_true", help="submit: actually send (default: dry run)")
     args = parser.parse_args()
-    shortlists = OUT / "shortlists.jsonl"
-    state = OUT / f"batch_{args.model}.json"
+    out_dir = SOURCES[args.source][2]
+    shortlists = out_dir / "shortlists.jsonl"
+    state = out_dir / f"batch_{args.model}.json"
 
     if args.command == "build":
         encoder = ONNXBiEncoderRetriever.from_pretrained(MODEL, query_prefix=BGE_QUERY_PREFIX, intra_op_num_threads=8)
         preprocessor = MarkItDownPreprocessor.from_pretrained(MODEL, 64, 0)
-        records = gate_data.load()[: args.limit]
+        records = load_records(args.source, args.limit)
         n = write_jsonl(build(records, encoder, preprocessor, SelectiveSentenceCompressor(encoder)), shortlists)
         print(f"saved {n} shortlists to {shortlists}")
         return
     if args.command == "context":
         encoder = ONNXBiEncoderRetriever.from_pretrained(MODEL, query_prefix=BGE_QUERY_PREFIX, intra_op_num_threads=8)
         preprocessor = MarkItDownPreprocessor.from_pretrained(MODEL, 64, 0)
-        out = OUT / "context.jsonl"
-        rows = neighbor_context(gate_data.load(), read_jsonl(shortlists), preprocessor, SelectiveSentenceCompressor(encoder))
+        out = out_dir / "context.jsonl"
+        items = read_jsonl(shortlists)
+        records = load_records(args.source, max(i.group for i in items) + 1)
+        rows = neighbor_context(records, items, preprocessor, SelectiveSentenceCompressor(encoder))
         with out.open("w", encoding="utf-8") as f:
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -222,7 +241,7 @@ def main() -> None:
     if args.command == "fetch":
         if batch.processing_status != "ended":
             raise SystemExit("not finished yet; try again later")
-        out = OUT / f"teacher_{args.model}.jsonl"
+        out = out_dir / f"teacher_{args.model}.jsonl"
         n = 0
         with out.open("w", encoding="utf-8") as f:
             for result in client.messages.batches.results(batch_id):

@@ -26,6 +26,9 @@ from .answers import contains_answer
 
 URL = "https://dl.fbaipublicfiles.com/dpr/data/retriever/biencoder-nq-dev.json.gz"
 DEFAULT_PATH = Path("data/dpr/biencoder-nq-dev.json.gz")
+# NQ train questions, disjoint from dev; 2.3 GB compressed, so it is streamed (iter_records).
+TRAIN_URL = "https://dl.fbaipublicfiles.com/dpr/data/retriever/biencoder-nq-train.json.gz"
+TRAIN_PATH = Path("data/dpr/biencoder-nq-train.json.gz")
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,10 +40,10 @@ class Pair:
     kind: str  # "answer", "hard" or "easy"
 
 
-def download(path: Path = DEFAULT_PATH) -> Path:
+def download(path: Path = DEFAULT_PATH, url: str = URL) -> Path:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(URL, path)
+        urllib.request.urlretrieve(url, path)
     return path
 
 
@@ -48,6 +51,21 @@ def load(path: Path = DEFAULT_PATH) -> list[dict[str, Any]]:
     with gzip.open(download(path), "rt", encoding="utf-8") as f:
         records: list[dict[str, Any]] = json.load(f)
     return records
+
+
+def iter_records(path: Path, *, positives: int, hard: int) -> Iterator[dict[str, Any]]:
+    """Stream records one at a time, keeping only the passages a caller uses
+    (the full train file does not fit comfortably in memory)."""
+    import ijson
+
+    with gzip.open(path, "rb") as f:
+        for record in ijson.items(f, "item", use_float=True):
+            yield {
+                "question": record["question"],
+                "answers": record["answers"],
+                "positive_ctxs": record["positive_ctxs"][:positives],
+                "hard_negative_ctxs": record["hard_negative_ctxs"][:hard],
+            }
 
 
 def _sentences(ctx: dict[str, Any], split: SentenceSplitter) -> list[str]:
