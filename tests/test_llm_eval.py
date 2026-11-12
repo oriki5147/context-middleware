@@ -97,6 +97,10 @@ def test_build_tasks_conditions() -> None:
     assert get["mw_rerank_open"].context == get["mw_rerank"].context
     assert '"unknown"' in get["mw_rerank"].prompt and "own knowledge" in get["mw_rerank_open"].prompt
     assert len(get["mw_rerank_k7"].context) >= len(get["mw_rerank"].context)
+    # Equal-budget retrieval: the best chunks of the plain RAG context, cut short.
+    assert get["rag_eq_k3"].context.startswith("Document [1]")
+    assert get["rag"].context.startswith(get["rag_eq_k3"].context)
+    assert len(get["rag_eq_k3"].context) <= len(get["rag_eq_k7"].context)
 
 
 class FakeClient:

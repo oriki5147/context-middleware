@@ -9,6 +9,9 @@ the production selection rules and defaults):
   mw_rerank      middleware, reranker over the bi top-20, best 3 sentences
   mw_rerank_nb   mw_rerank plus each sentence's document neighbors
   mw_rerank_k5/7 mw_rerank keeping the best 5 / 7 sentences (less compression)
+  rag_eq_k3/5/7  plain retrieval cut to the token count of the best 3 / 5 / 7
+                 sentences: what "just retrieve fewer chunks" gives for the
+                 same budget, the fair baseline for the compression
   counterfactual mw_rerank with the answer string swapped for a same-type
                  wrong answer (evaluation-only probe of context reliance)
   *_open         the same context under OPEN_PROMPT, which lets the model fall
@@ -61,10 +64,12 @@ CLOSED_BOOK_PROMPT = "Answer the question with a short phrase.\n\nQuestion: {que
 NO_RESULTS = "(no search results)"
 OPEN_SUFFIX = "_open"
 MORE_SENTENCES = {"mw_rerank_k5": 5, "mw_rerank_k7": 7}
+EQUAL_BUDGET = {"rag_eq_k3": 3, "rag_eq_k5": 5, "rag_eq_k7": 7}
 
 ANSWERABLE_CONDITIONS = (
     "closed_book", "oracle", "rag", "mw_bi", "mw_rerank", "mw_rerank_nb", "counterfactual",
     "mw_rerank_k5", "mw_rerank_k7", "rag_open", "mw_rerank_open", "mw_rerank_k7_open",
+    "rag_eq_k3", "rag_eq_k5", "rag_eq_k7",
 )
 NEGATIVE_CONDITIONS = (
     "closed_book", "rag", "mw_rerank", "mw_rerank_k7", "rag_open", "mw_rerank_open", "mw_rerank_k7_open",
@@ -115,11 +120,14 @@ def _with_neighbors(raw: RawQuestion, chosen: list[int]) -> list[int]:
 def contexts(raw: RawQuestion, config: MiddlewareConfig) -> dict[str, str]:
     """Search-results text for every context condition (empty string = none)."""
     _, retrieved, _ = candidate_indices(raw)
-    rag = "\n".join(
-        f"Document [{n}](Title: {raw.chunk_title[c]}) {raw.chunk_text[c]}" for n, c in enumerate(retrieved, 1)
-    )
+
+    def documents(chunks: Sequence[int]) -> str:
+        return "\n".join(
+            f"Document [{n}](Title: {raw.chunk_title[c]}) {raw.chunk_text[c]}" for n, c in enumerate(chunks, 1)
+        )
+
     out = {
-        "rag": rag,
+        "rag": documents(retrieved),
         "mw_bi": "\n".join(raw.sent_text[i] for i in _middleware_sentences(raw, False, config)),
     }
     rerank = _middleware_sentences(raw, True, config)
@@ -128,6 +136,11 @@ def contexts(raw: RawQuestion, config: MiddlewareConfig) -> dict[str, str]:
     for condition, k in MORE_SENTENCES.items():
         wider = replace(config, max_sentences=k)
         out[condition] = "\n".join(raw.sent_text[i] for i in _middleware_sentences(raw, True, wider))
+    for condition, k in EQUAL_BUDGET.items():
+        kept = _middleware_sentences(raw, True, replace(config, max_sentences=k))
+        # Best chunks within the sentences' token count (always at least one chunk).
+        _, top, _ = candidate_indices(raw, retrieval_tokens=int(raw.sent_tokens[kept].sum()))
+        out[condition] = documents(top) if kept else ""
     if raw.gold_doc >= 0:
         gold = [c for c in range(len(raw.chunk_text)) if raw.chunk_doc[c] == raw.gold_doc]
         title = raw.chunk_title[gold[0]] if gold else ""
