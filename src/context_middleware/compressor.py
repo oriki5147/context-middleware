@@ -10,6 +10,11 @@ With ``rerank_context`` the reranker reads each shortlisted sentence together
 with its previous and next sentence in the document; the output is still the
 sentence alone.
 
+An optional ``second_reranker`` (a larger cross-encoder) then rescores only
+the first reranker's best ``second_top_n`` sentences, and selection runs on
+its scores: a cascade spends the expensive model on the few sentences that
+can still make the cut.
+
 Thresholds are on their scorer's scale (bi-encoder inner product, or
 reranker probability), so they are model-specific and must be calibrated on
 data; defaults are calibrated for bge-small-en-v1.5 and the distilled context
@@ -86,6 +91,9 @@ class SelectiveSentenceCompressor:
         rerank_top_n: int = 20,
         rerank_empty_threshold: float = 0.01,
         rerank_context: bool = True,
+        second_reranker: Reranker | None = None,
+        second_top_n: int = 8,
+        second_context: bool = False,
     ) -> None:
         if min_sentences < 0:
             raise ValueError("min_sentences must be non-negative")
@@ -93,6 +101,10 @@ class SelectiveSentenceCompressor:
             raise ValueError("max_sentences must be >= max(min_sentences, 1)")
         if rerank_top_n <= 0:
             raise ValueError("rerank_top_n must be positive")
+        if second_top_n <= 0:
+            raise ValueError("second_top_n must be positive")
+        if second_reranker is not None and reranker is None:
+            raise ValueError("a second_reranker needs a first reranker")
         self.encoder = encoder
         self.sentence_threshold = sentence_threshold
         self.empty_threshold = empty_threshold
@@ -102,6 +114,9 @@ class SelectiveSentenceCompressor:
         self.rerank_top_n = rerank_top_n
         self.rerank_empty_threshold = rerank_empty_threshold
         self.rerank_context = rerank_context
+        self.second_reranker = second_reranker
+        self.second_top_n = second_top_n
+        self.second_context = second_context
         self._split = sentence_splitter or pysbd_splitter()
         # Ingest-time caches (see precompute): sentence texts per chunk, and
         # bi-encoder embeddings per (title, sentence). Pure optimizations:
@@ -158,6 +173,8 @@ class SelectiveSentenceCompressor:
           runs first, so such queries never pay for reranking.
         - With a reranker, also return ``[]`` when its best score is
           ``<= rerank_empty_threshold``.
+        - With a second reranker, only the first one's best ``second_top_n``
+          sentences remain candidates, scored by the second.
         - Otherwise keep the best ``max_sentences``; with a ``sentence_threshold``,
           drop those below it, keeping at least the top ``min_sentences``.
         """
@@ -175,6 +192,13 @@ class SelectiveSentenceCompressor:
             sentences = [sentences[i] for i in shortlist]
             scores = self.reranker.score(query, self._in_context(sentences) if self.rerank_context else sentences)
             empty_threshold = self.rerank_empty_threshold
+            if self.second_reranker is not None and scores.max() > empty_threshold:
+                head = np.argsort(-scores, kind="stable")[: self.second_top_n]
+                sentences = [sentences[i] for i in head]
+                scores = self.second_reranker.score(
+                    query, self._in_context(sentences) if self.second_context else sentences
+                )
+                empty_threshold = -np.inf  # emptiness was the first reranker's call
         kept = select_sentences(
             scores,
             self.sentence_threshold,

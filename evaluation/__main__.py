@@ -3,7 +3,7 @@
     python -m evaluation report --split dev [--tag T]
     python -m evaluation build-raw  --split dev [--limit N] [--negatives N] [--tag T]
     python -m evaluation report-raw --split dev [--tag T]
-    python -m evaluation rescore-raw --split dev --reranker DIR --tag T [--context] [--source-tag S]
+    python -m evaluation rescore-raw --split dev --reranker DIR --tag T [--context] [--source-tag S] [--second]
     python -m evaluation rank-judge --split dev [--limit N] [--models haiku,sonnet] [--confirm]
 
 ``build`` runs the models once (slow) and caches candidates to data/eval/;
@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
-from context_middleware import BudgetStrategy
+from context_middleware import BudgetStrategy, MiddlewareConfig
 
 from . import candidates, nq_data, raw, sweep
 
@@ -64,6 +65,7 @@ def main() -> None:
     parser.add_argument("--reranker", type=Path, default=None, help="rescore-raw: cross-encoder model dir")
     parser.add_argument("--context", action="store_true", help="rescore-raw: score sentences with their neighbors")
     parser.add_argument("--source-tag", default="", help="rescore-raw: tag of the cache to rescore (default: untagged)")
+    parser.add_argument("--second", action="store_true", help="rescore-raw: --reranker is a second stage over the source's best sentences")
     args = parser.parse_args()
     name = args.split + (f"_{args.tag}" if args.tag else "")
     cache = OUT / f"{name}.pkl"
@@ -87,7 +89,11 @@ def main() -> None:
             parser.error("rescore-raw needs --reranker and --tag (the rescored cache's name)")
         source = OUT / (args.split + (f"_{args.source_tag}" if args.source_tag else "") + "_raw.pkl")
         reranker = ONNXCrossEncoderReranker.from_pretrained(args.reranker, intra_op_num_threads=8)
-        raw.save(raw.rescore(raw.load(source), reranker, context=args.context), raw_cache)
+        if args.second:
+            config = replace(MiddlewareConfig(), second_rerank_context=args.context)
+            raw.save(raw.cascade(raw.load(source), reranker, config), raw_cache)
+        else:
+            raw.save(raw.rescore(raw.load(source), reranker, context=args.context), raw_cache)
         print(f"saved {raw_cache}")
     elif args.command == "rank-judge":
         run_rank_judge(args, raw.load(raw_cache), OUT / "llm" / name)

@@ -189,6 +189,32 @@ def test_rerank_context_needs_precompute_and_can_be_turned_off() -> None:
     assert sorted(reranker.seen) == sorted([*plain, *plain])
 
 
+def test_second_reranker_rescores_only_the_first_rerankers_head() -> None:
+    # First reranker: C > A > B > D. The second sees C, A, B only and prefers B.
+    first = FakeReranker({"A.": 0.6, "B.": 0.5, "C.": 0.9, "D.": 0.4})
+    second = FakeReranker({"A.": 0.2, "B.": 0.8, "C.": 0.3})
+    compressor = make(reranker=first, second_reranker=second, second_top_n=3, sentence_threshold=None, max_sentences=2)
+    kept = compressor.compress(Q, CHUNKS, "q")
+    assert sorted(second.seen) == ["A.", "B.", "C."]
+    assert [s.content for s in kept] == ["B.", "C."]
+    assert [s.score for s in kept] == pytest.approx([0.8, 0.3])
+
+
+def test_second_reranker_does_not_overrule_the_empty_rule_or_run_without_a_first() -> None:
+    first = FakeReranker({"A.": 0.01, "B.": 0.02, "C.": 0.03, "D.": 0.0})
+    second = FakeReranker({"A.": 0.9, "B.": 0.9, "C.": 0.9, "D.": 0.9})
+    compressor = make(reranker=first, second_reranker=second, rerank_empty_threshold=0.05)
+    assert compressor.compress(Q, CHUNKS, "q") == []
+    assert second.seen == []
+    with pytest.raises(ValueError):
+        make(second_reranker=second)
+    # Its scores never empty the context: that was the first reranker's call.
+    low = FakeReranker({"A.": 0.001, "B.": 0.0, "C.": 0.0, "D.": 0.0})
+    kept = make(reranker=FakeReranker({"A.": 0.9, "B.": 0.8, "C.": 0.7, "D.": 0.6}), second_reranker=low,
+                sentence_threshold=None, max_sentences=1).compress(Q, CHUNKS, "q")
+    assert [s.content for s in kept] == ["A."]
+
+
 def test_reranker_requires_query_text() -> None:
     with pytest.raises(ValueError):
         make(reranker=FakeReranker({})).compress(Q, CHUNKS)

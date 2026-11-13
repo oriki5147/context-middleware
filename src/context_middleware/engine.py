@@ -47,21 +47,24 @@ class CPUMiddlewareEngine:
         query_prefix: str = "",
         intra_op_num_threads: int = 0,
         reranker_dir: str | Path | None = None,
+        second_reranker_dir: str | Path | None = None,
         token_counter: TokenCounter | None = None,
     ) -> CPUMiddlewareEngine:
         """Build every phase from one config and one encoder directory.
 
         ``reranker_dir`` (a cross-encoder with ``model_int8.onnx`` and
-        ``tokenizer.json``) enables the optional reranking stage.
+        ``tokenizer.json``) enables the optional reranking stage, and
+        ``second_reranker_dir`` a larger cross-encoder over its best few
+        sentences.
         """
         config = config or MiddlewareConfig()
-        reranker = (
-            None
-            if reranker_dir is None
-            else ONNXCrossEncoderReranker.from_pretrained(
-                reranker_dir, intra_op_num_threads=intra_op_num_threads
-            )
-        )
+
+        def cross_encoder(directory: str | Path | None) -> ONNXCrossEncoderReranker | None:
+            if directory is None:
+                return None
+            return ONNXCrossEncoderReranker.from_pretrained(directory, intra_op_num_threads=intra_op_num_threads)
+
+        reranker = cross_encoder(reranker_dir)
         retriever = ONNXBiEncoderRetriever.from_pretrained(
             model_dir,
             model_file=model_file,
@@ -85,6 +88,9 @@ class CPUMiddlewareEngine:
                 rerank_top_n=config.rerank_top_n,
                 rerank_empty_threshold=config.rerank_empty_threshold,
                 rerank_context=config.rerank_context,
+                second_reranker=cross_encoder(second_reranker_dir),
+                second_top_n=config.second_rerank_top_n,
+                second_context=config.second_rerank_context,
             ),
             reorderer=ContextReorderer(config.reorder_strategy),
             config=config,

@@ -25,6 +25,7 @@ from numpy.typing import NDArray
 from context_middleware import (
     BGE_QUERY_PREFIX,
     MarkItDownPreprocessor,
+    MiddlewareConfig,
     ONNXBiEncoderRetriever,
     ONNXCrossEncoderReranker,
     SelectiveSentenceCompressor,
@@ -220,6 +221,45 @@ def rescore(
             for i, (text, d, c) in enumerate(zip(r.sent_text, r.sent_doc.tolist(), r.sent_chunk.tolist()))
         ]
         out.append(replace(r, sent_rerank=reranker.score(r.question, sentences)))
+        if n % 200 == 0 or n == len(raws):
+            log(f"  {n}/{len(raws)}")
+    return out
+
+
+def cascade(
+    raws: Iterable[RawQuestion],
+    second: Reranker,
+    config: MiddlewareConfig | None = None,
+    log: Callable[[str], None] = print,
+) -> list[RawQuestion]:
+    """Copies of ``raws`` (already scored by the first reranker) whose
+    ``sent_rerank`` orders the production shortlist as the two-stage compressor
+    would: the first reranker's best ``second_rerank_top_n`` sentences get
+    1 + their second-stage score, so they lead in the second reranker's order,
+    and every other sentence keeps its first-stage score. Questions the empty
+    rule empties are left untouched. Valid for the ``rerank_top_n`` pool only:
+    reports over other pool sizes do not describe the cascade.
+    """
+    config = config or MiddlewareConfig()
+    raws = list(raws)
+    out = []
+    for n, r in enumerate(raws, 1):
+        idx, _, _ = candidate_indices(r)
+        bi = r.sent_embedding[idx] @ r.query_embedding
+        shortlist = idx[np.argsort(-bi, kind="stable")[: config.rerank_top_n]]
+        first = r.sent_rerank[shortlist]
+        scores = r.sent_rerank.copy()
+        if len(shortlist) and bi.max() > config.empty_threshold and first.max() > config.rerank_empty_threshold:
+            head = shortlist[np.argsort(-first, kind="stable")[: config.second_rerank_top_n]]
+            sentences = [
+                TextSegment(
+                    f"s{i}", with_context(r, int(i)) if config.second_rerank_context else r.sent_text[i],
+                    f"d{r.sent_doc[i]}", title=r.chunk_title[r.sent_chunk[i]],
+                )
+                for i in head
+            ]
+            scores[head] = 1.0 + second.score(r.question, sentences)
+        out.append(replace(r, sent_rerank=scores))
         if n % 200 == 0 or n == len(raws):
             log(f"  {n}/{len(raws)}")
     return out

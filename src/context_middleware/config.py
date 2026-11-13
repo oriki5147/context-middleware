@@ -54,6 +54,12 @@ class MiddlewareConfig:
     # ms-marco-MiniLM-L6-v2 on single sentences. Set False for off-the-shelf
     # cross-encoders.
     rerank_context: bool = True
+    # Optional second cross-encoder (engine: second_reranker_dir) rescoring
+    # the reranker's best second_rerank_top_n sentences. With the 68M Ettin
+    # reranker, zero-shot on single sentences, the answer sentence reaches the
+    # top 3 for 64.7% of NQ dev questions (61.6% without) at about +40 ms.
+    second_rerank_top_n: int = 8
+    second_rerank_context: bool = False
     # Token budget for the final context, filled best sentence first.
     max_context_tokens: int | None = None
     budget_strategy: BudgetStrategy = BudgetStrategy.FILL
@@ -75,5 +81,7 @@ class MiddlewareConfig:
             raise ValueError("max_sentences must be >= max(min_sentences, 1)")
         if self.rerank_top_n <= 0:
             raise ValueError("rerank_top_n must be positive")
+        if self.second_rerank_top_n <= 0:
+            raise ValueError("second_rerank_top_n must be positive")
         if self.max_context_tokens is not None and self.max_context_tokens <= 0:
             raise ValueError("max_context_tokens must be positive")

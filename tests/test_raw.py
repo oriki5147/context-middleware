@@ -100,3 +100,27 @@ def test_with_context_matches_the_training_format() -> None:
         prev = r.sent_text[i - 1] if i > 0 and r.sent_doc[i - 1] == same else ""
         nxt = r.sent_text[i + 1] if i + 1 < len(r.sent_text) and r.sent_doc[i + 1] == same else ""
         assert f"{title}\n{with_context(r, i)}" == sentence_text(title, r.sent_text[i], prev, nxt, context=True)
+
+
+def test_cascade_puts_the_second_rerankers_order_first() -> None:
+    from context_middleware import MiddlewareConfig
+    from evaluation.raw import cascade
+
+    seen: list[list[str]] = []
+
+    class PrefersLast:
+        def score(self, query: str, segments: Sequence[TextSegment]) -> NDArray[np.float32]:
+            seen.append([s.content for s in segments])
+            return np.linspace(0.1, 0.9, len(segments)).astype(np.float32)
+
+    # make_raw(): reranker scores by raw index 0.01, 0.9, 0.2, 0.05, so the first stage's best two are 1, 2.
+    r = make_raw()
+    config = MiddlewareConfig(second_rerank_top_n=2, empty_threshold=0.0)
+    (new,) = cascade([r], PrefersLast(), config, log=lambda _: None)
+    assert seen == [[r.sent_text[1], r.sent_text[2]]]  # best first
+    assert new.sent_rerank[2] == pytest.approx(1.9) and new.sent_rerank[1] == pytest.approx(1.1)
+    untouched = [i for i in range(len(r.sent_text)) if i not in (1, 2)]
+    assert new.sent_rerank[untouched].tolist() == r.sent_rerank[untouched].tolist()
+    # The empty rule comes first: nothing is rescored.
+    (same,) = cascade([r], PrefersLast(), MiddlewareConfig(empty_threshold=0.0, rerank_empty_threshold=0.95), log=lambda _: None)
+    assert same.sent_rerank.tolist() == r.sent_rerank.tolist() and len(seen) == 1
