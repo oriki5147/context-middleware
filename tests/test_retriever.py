@@ -116,6 +116,16 @@ def test_batches_inputs() -> None:
     assert [len(f["input_ids"]) for f in session.feeds] == [2, 2, 1]
 
 
+def test_each_text_runs_alone_by_default_and_workers_keep_the_order() -> None:
+    session = FakeSession()
+    alone = make_retriever(session=session).encode(["cat", "dog fish", "bird", "cat cat"])
+    assert [len(f["input_ids"]) for f in session.feeds] == [1, 1, 1, 1]  # no batch-mates
+    parallel = make_retriever(workers=3).encode(["cat", "dog fish", "bird", "cat cat"])
+    np.testing.assert_array_equal(parallel, alone)
+    with pytest.raises(ValueError):
+        make_retriever(workers=0)
+
+
 def test_token_type_ids_only_sent_when_model_declares_them() -> None:
     plain = FakeSession()
     make_retriever(session=plain).encode(["cat"])

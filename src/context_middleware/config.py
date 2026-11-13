@@ -39,7 +39,7 @@ class MiddlewareConfig:
     # Empty context when even the best sentence's bi-encoder score is
     # <= empty_threshold, or, with a reranker, when its best score is
     # <= rerank_empty_threshold. The bi-encoder rule is the one that catches
-    # off-topic queries (399 of 400 on NQ dev, no answerable question lost);
+    # off-topic queries (398 of 400 on NQ dev, 1 of 1,327 answerable lost);
     # neither catches on-topic queries whose answer is absent. Calibrated for
     # bge-small-en-v1.5 INT8 and the distilled context reranker (INT8);
     # recalibrate when changing models.

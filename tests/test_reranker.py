@@ -51,6 +51,23 @@ def test_scores_are_sigmoid_of_logits_and_title_prefixed() -> None:
     assert tokenizer.pairs == [("q", "abcde"), ("q", "T\nx")]
 
 
+def test_each_pair_runs_alone_by_default_and_workers_keep_the_order() -> None:
+    session = FakeSession()
+    segments = [TextSegment(str(i), "x" * i, "d") for i in range(1, 8)]
+    alone = ONNXCrossEncoderReranker(session, FakePairTokenizer()).score("q", segments)
+    assert session.batches == [1] * 7  # a score never depends on batch-mates
+    parallel = ONNXCrossEncoderReranker(FakeSession(), FakePairTokenizer(), workers=4).score("q", segments)
+    assert parallel.tolist() == alone.tolist()
+    assert np.all(np.diff(alone) > 0)  # longer passage -> higher fake logit, in input order
+
+
+def test_invalid_sizes_raise() -> None:
+    with pytest.raises(ValueError):
+        ONNXCrossEncoderReranker(FakeSession(), FakePairTokenizer(), batch_size=0)
+    with pytest.raises(ValueError):
+        ONNXCrossEncoderReranker(FakeSession(), FakePairTokenizer(), workers=0)
+
+
 def test_batches_pairs_and_handles_empty_input() -> None:
     session = FakeSession()
     reranker = ONNXCrossEncoderReranker(session, FakePairTokenizer(), batch_size=2)
