@@ -9,6 +9,8 @@ the production selection rules and defaults):
   mw_rerank      middleware, reranker over the bi top-20, best 3 sentences
   mw_rerank_nb   mw_rerank plus each sentence's document neighbors
   mw_rerank_k5/7 mw_rerank keeping the best 5 / 7 sentences (less compression)
+  mw_rerank*_t   mw_rerank / _nb / _k7 laid out like retrieval results: sentences
+                 grouped by document under its title, in document order
   rag_eq_k3/5/7  plain retrieval cut to the token count of the best 3 / 5 / 7
                  sentences: what "just retrieve fewer chunks" gives for the
                  same budget, the fair baseline for the compression
@@ -40,7 +42,8 @@ from pathlib import Path
 
 import numpy as np
 
-from context_middleware import MiddlewareConfig
+from context_middleware import ContextLayout, MiddlewareConfig, TextSegment
+from context_middleware.reorderer import render
 from context_middleware.compressor import select_sentences
 
 from .answers import contains_answer, normalize
@@ -64,12 +67,14 @@ CLOSED_BOOK_PROMPT = "Answer the question with a short phrase.\n\nQuestion: {que
 NO_RESULTS = "(no search results)"
 OPEN_SUFFIX = "_open"
 MORE_SENTENCES = {"mw_rerank_k5": 5, "mw_rerank_k7": 7}
+TITLED_SUFFIX = "_t"
 EQUAL_BUDGET = {"rag_eq_k3": 3, "rag_eq_k5": 5, "rag_eq_k7": 7}
 
 ANSWERABLE_CONDITIONS = (
     "closed_book", "oracle", "rag", "mw_bi", "mw_rerank", "mw_rerank_nb", "counterfactual",
     "mw_rerank_k5", "mw_rerank_k7", "rag_open", "mw_rerank_open", "mw_rerank_k7_open",
     "rag_eq_k3", "rag_eq_k5", "rag_eq_k7",
+    "mw_rerank_t", "mw_rerank_nb_t", "mw_rerank_k7_t",
 )
 NEGATIVE_CONDITIONS = (
     "closed_book", "rag", "mw_rerank", "mw_rerank_k7", "rag_open", "mw_rerank_open", "mw_rerank_k7_open",
@@ -117,6 +122,20 @@ def _with_neighbors(raw: RawQuestion, chosen: list[int]) -> list[int]:
     return out
 
 
+def _titled(raw: RawQuestion, chosen: Sequence[int]) -> str:
+    """``chosen`` sentences (best first) in the product's TITLED layout."""
+    return render(
+        [
+            TextSegment(
+                f"s{i}", raw.sent_text[i], f"d{raw.sent_doc[i]}",
+                title=raw.chunk_title[int(raw.sent_chunk[i])], position=i,
+            )
+            for i in chosen
+        ],
+        ContextLayout.TITLED,
+    )
+
+
 def contexts(raw: RawQuestion, config: MiddlewareConfig) -> dict[str, str]:
     """Search-results text for every context condition (empty string = none)."""
     _, retrieved, _ = candidate_indices(raw)
@@ -131,11 +150,12 @@ def contexts(raw: RawQuestion, config: MiddlewareConfig) -> dict[str, str]:
         "mw_bi": "\n".join(raw.sent_text[i] for i in _middleware_sentences(raw, False, config)),
     }
     rerank = _middleware_sentences(raw, True, config)
-    out["mw_rerank"] = "\n".join(raw.sent_text[i] for i in rerank)
-    out["mw_rerank_nb"] = "\n".join(raw.sent_text[i] for i in _with_neighbors(raw, rerank))
+    chosen = {"mw_rerank": rerank, "mw_rerank_nb": _with_neighbors(raw, rerank)}
     for condition, k in MORE_SENTENCES.items():
-        wider = replace(config, max_sentences=k)
-        out[condition] = "\n".join(raw.sent_text[i] for i in _middleware_sentences(raw, True, wider))
+        chosen[condition] = _middleware_sentences(raw, True, replace(config, max_sentences=k))
+    for condition, kept in chosen.items():
+        out[condition] = "\n".join(raw.sent_text[i] for i in kept)
+        out[condition + TITLED_SUFFIX] = _titled(raw, kept)
     for condition, k in EQUAL_BUDGET.items():
         kept = _middleware_sentences(raw, True, replace(config, max_sentences=k))
         # Best chunks within the sentences' token count (always at least one chunk).

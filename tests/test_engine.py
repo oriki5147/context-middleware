@@ -18,6 +18,7 @@ from test_retriever import FakeSession, FakeTokenizer
 from context_middleware import (
     BudgetStrategy,
     CPUMiddlewareEngine,
+    ContextLayout,
     ContextReorderer,
     MarkItDownPreprocessor,
     MiddlewareConfig,
@@ -55,6 +56,7 @@ def make_engine(**config: Any) -> tuple[CPUMiddlewareEngine, FakeTokenizer]:
     config.setdefault("sentence_threshold", 0.65)
     config.setdefault("empty_threshold", 0.45)
     config.setdefault("max_sentences", None)
+    config.setdefault("layout", ContextLayout.PLAIN)  # these tests read the bare sentences
     cfg = MiddlewareConfig(**config)
     engine = CPUMiddlewareEngine(
         preprocessor=MarkItDownPreprocessor(WhitespaceTokenizer(), sentence_splitter=line_splitter),
@@ -136,6 +138,26 @@ def test_custom_token_counter_is_used_for_reporting() -> None:
     engine.count_tokens = len  # e.g. a target-LLM tokenizer; here: characters
     result = engine.optimize("cat")
     assert result.compressed_token_count == len("cat cat cat")
+
+
+def test_titled_layout_groups_ingested_sentences_under_their_document() -> None:
+    engine, _ = make_engine(sentence_threshold=0.5, empty_threshold=0.1, layout=ContextLayout.TITLED)
+    engine.retriever.clear()
+    engine.add_chunks(
+        [
+            TextSegment("a#0", "cat cat cat\nfish fish fish\nbird bird bird", "a", title="Pets"),
+            TextSegment("a#1", "cat cat dog", "a", title="Pets"),
+            TextSegment("b#0", "cat fish dog", "b"),
+        ]
+    )
+    result = engine.optimize("cat")
+    # Document a leads (it holds the best sentence); a gap marker stands where
+    # its two cat-free sentences were dropped.
+    assert result.compressed_prompt.splitlines() == [
+        "Document [1](Title: Pets) cat cat cat ... cat cat dog",
+        "Document [2] cat fish dog",
+    ]
+    assert result.compressed_token_count == engine.count_tokens(result.compressed_prompt)  # headers included
 
 
 def test_ingest_chunks_and_indexes_documents(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -17,6 +17,7 @@ from evaluation.llm_eval import (
     build_tasks,
     contexts,
     plant_counterfactual,
+    _titled,
     question_word,
     report,
     run,
@@ -33,6 +34,10 @@ def test_contexts_follow_production_selection() -> None:
     assert ctx["mw_rerank"] == "B.\nC.\nA."  # best 3 by reranker: idx 1, 2, 3
     assert ctx["mw_rerank_nb"] == "A.\nB.\nC.\nA.\nA."  # neighbors stay within a document
     assert ctx["oracle"] == "Document [1](Title: T0) A. B. C."
+    # Titled layout: grouped by document (best sentence's document first), in document order.
+    assert ctx["mw_rerank_t"] == "Document [1](Title: T0) B. C.\nDocument [2](Title: T1) A."
+    assert ctx["mw_rerank_nb_t"] == "Document [1](Title: T0) A. B. C.\nDocument [2](Title: T1) A. A."
+    assert _titled(make_raw(), [2, 0]) == "Document [1](Title: T0) A. ... C."  # a gap is marked
     assert ctx["rag"].splitlines() == [
         "Document [1](Title: T0) A. B.",
         "Document [2](Title: T1) A. A.",
@@ -139,7 +144,7 @@ def test_run_resumes_without_paying_twice_and_respects_cap(tmp_path: Path) -> No
 
 
 def test_failures_are_not_cached(tmp_path: Path) -> None:
-    tasks = build_tasks([make_raw()], answerable=1, negatives=0)
+    tasks = build_tasks([make_raw()], answerable=1, negatives=0, only=["closed_book", "oracle", "rag", "mw_rerank"])
     cache = ResponseCache(tmp_path / "fake.jsonl")
     failures = run(tasks, FakeClient(fail_on="Document [1](Title: T0) A. B. C."), cache, 100, log=lambda _: None)
     assert failures == 1 and len(cache.done) == len(tasks) - 1

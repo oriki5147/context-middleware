@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from .reorderer import ReorderStrategy
+from .reorderer import ContextLayout, ReorderStrategy
 
 
 class BudgetStrategy(str, Enum):
@@ -57,8 +57,10 @@ class MiddlewareConfig:
     # Token budget for the final context, filled best sentence first.
     max_context_tokens: int | None = None
     budget_strategy: BudgetStrategy = BudgetStrategy.FILL
-    # Phase 4.
+    # Phase 4. The TITLED layout adds a short header per document, which
+    # max_context_tokens does not count (the reported token count does).
     reorder_strategy: ReorderStrategy = ReorderStrategy.BEST_FIRST
+    layout: ContextLayout = ContextLayout.TITLED
 
     def __post_init__(self) -> None:
         if self.chunk_size_tokens <= 0:

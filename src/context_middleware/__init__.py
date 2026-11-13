@@ -5,7 +5,7 @@ from .config import BudgetStrategy, MiddlewareConfig
 from .engine import CPUMiddlewareEngine
 from .models import CompressionResult, Embedding, TextSegment
 from .preprocessor import MarkItDownPreprocessor
-from .reorderer import ContextReorderer, ReorderStrategy
+from .reorderer import ContextLayout, ContextReorderer, ReorderStrategy
 from .reranker import ONNXCrossEncoderReranker
 from .retriever import BGE_QUERY_PREFIX, ONNXBiEncoderRetriever, Pooling
 
@@ -14,6 +14,7 @@ __all__ = [
     "BudgetStrategy",
     "CPUMiddlewareEngine",
     "CompressionResult",
+    "ContextLayout",
     "ContextReorderer",
     "Embedding",
     "MarkItDownPreprocessor",

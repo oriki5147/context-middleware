@@ -9,7 +9,7 @@ from .compressor import SelectiveSentenceCompressor
 from .config import BudgetStrategy, MiddlewareConfig
 from .models import CompressionResult, TextSegment
 from .preprocessor import MarkItDownPreprocessor
-from .reorderer import ContextReorderer
+from .reorderer import ContextReorderer, render
 from .reranker import ONNXCrossEncoderReranker
 from .retriever import ONNXBiEncoderRetriever, Pooling
 
@@ -17,9 +17,6 @@ from .retriever import ONNXBiEncoderRetriever, Pooling
 # tokenizer, a model-agnostic proxy. Pass e.g. a tiktoken-based counter to
 # report exact numbers for a specific LLM.
 TokenCounter = Callable[[str], int]
-
-SENTENCE_SEPARATOR = "\n"
-
 
 class CPUMiddlewareEngine:
     def __init__(
@@ -117,7 +114,7 @@ class CPUMiddlewareEngine:
         if not sentences:
             return CompressionResult.empty(original)
 
-        prompt = SENTENCE_SEPARATOR.join(s.content for s in self.reorderer.reorder(sentences))
+        prompt = render(self.reorderer.reorder(sentences), self.config.layout)
         return CompressionResult.from_counts(prompt, original, self.count_tokens(prompt))
 
     def _fit_budget(self, ranked: list[TextSegment]) -> list[TextSegment]:

@@ -1,6 +1,7 @@
 import pytest
 
-from context_middleware import ContextReorderer, ReorderStrategy, TextSegment
+from context_middleware import ContextLayout, ContextReorderer, ReorderStrategy, TextSegment
+from context_middleware.reorderer import render
 
 
 def seg(segment_id: str, score: float) -> TextSegment:
@@ -37,3 +38,28 @@ def test_does_not_mutate_input_and_handles_small_inputs(strategy: ReorderStrateg
     assert SEGMENTS == original
     assert reorderer.reorder([]) == []
     assert ids(reorderer.reorder([seg("only", 0.1)])) == ["only"]
+
+
+def sentence(content: str, doc: str, position: int | None, title: str = "") -> TextSegment:
+    return TextSegment(content, content, doc, title=title, position=position)
+
+
+def test_plain_layout_is_one_sentence_per_line() -> None:
+    segments = [sentence("B.", "d1", 1), sentence("A.", "d0", 0)]
+    assert render(segments, ContextLayout.PLAIN) == "B.\nA."
+
+
+def test_titled_layout_groups_by_document_in_document_order() -> None:
+    segments = [
+        sentence("E.", "d1", 9, "Second"), sentence("C.", "d0", 2, "First"),
+        sentence("A.", "d0", 0, "First"), sentence("D.", "d0", 3, "First"),
+    ]
+    # The first sentence's document leads; adjacent sentences join, a gap is marked.
+    assert render(segments).splitlines() == ["Document [1](Title: Second) E.", "Document [2](Title: First) A. ... C. D."]
+
+
+def test_titled_layout_without_titles_or_positions() -> None:
+    # Not ingested: the given (reordered) order is kept, and adjacency is unknown.
+    segments = [sentence("B.", "d0", None), sentence("A.", "d0", None)]
+    assert render(segments, ContextLayout.TITLED) == "Document [1] B. ... A."
+    assert render([]) == ""

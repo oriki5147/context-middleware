@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -204,7 +205,10 @@ def test_precompute_moves_embedding_out_of_the_query_path() -> None:
 
     assert len(encoder.embedded) == embedded_at_ingest  # nothing encoded at query time
     cold = SelectiveSentenceCompressor(FakeEncoder(SCORES), sentence_splitter=period_splitter)
-    assert kept == cold.compress(Q, CHUNKS)  # identical results with or without the cache
+    # Identical results with or without the cache, except that only ingested
+    # sentences know their position in the document (C. A. D. B.).
+    assert [replace(s, position=None) for s in kept] == cold.compress(Q, CHUNKS)
+    assert [(s.content, s.position) for s in kept] == [("A.", 1), ("B.", 3), ("C.", 0)]
 
 
 def test_cache_misses_are_encoded_once_then_reused() -> None:

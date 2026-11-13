@@ -25,6 +25,9 @@ class TextSegment:
     # Document title, kept out of ``content`` so content stays a verbatim slice.
     # Prepended when embedding to decontextualize the passage (DPR, RECOMP).
     title: str = ""
+    # Sentences only: order within the ingested documents (consecutive numbers
+    # are adjacent sentences), None when the document was not ingested.
+    position: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

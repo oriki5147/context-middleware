@@ -112,6 +112,7 @@ class SelectiveSentenceCompressor:
         # (document, sentence). Not recomputable at query time, when only the
         # retrieved chunks are seen: a sentence missing here is reranked alone.
         self._around: dict[tuple[str, str], tuple[str, str]] = {}
+        self._position: dict[tuple[str, str], int] = {}  # ingest order, for the output layout
 
     def precompute(self, chunks: Sequence[TextSegment]) -> None:
         """Split and embed ``chunks``' sentences ahead of queries (call at ingest).
@@ -124,6 +125,7 @@ class SelectiveSentenceCompressor:
         sentences = self.split(chunks)
         self._embed(sentences)
         for i, s in enumerate(sentences):
+            self._position.setdefault((s.source_doc, s.content), len(self._position))
             before = sentences[i - 1] if i > 0 else None
             after = sentences[i + 1] if i + 1 < len(sentences) else None
             self._around.setdefault(
@@ -138,11 +140,13 @@ class SelectiveSentenceCompressor:
         self._chunk_sentences.clear()
         self._embeddings.clear()
         self._around.clear()
+        self._position.clear()
 
     def compress(
         self, query_embedding: Embedding, chunks: Sequence[TextSegment], query: str | None = None
     ) -> list[TextSegment]:
-        """Return kept sentences, best first, each carrying its ``score``.
+        """Return kept sentences, best first, each carrying its ``score`` (and
+        its ``position`` in the document, when the document was precomputed).
 
         ``query_embedding`` comes from the same encoder's ``encode_query``, so
         the engine embeds the query once for both retrieval and compression.
@@ -178,7 +182,14 @@ class SelectiveSentenceCompressor:
             self.min_sentences,
             self.max_sentences,
         )
-        return [replace(sentences[i], score=float(scores[i])) for i in kept]
+        return [
+            replace(
+                sentences[i],
+                score=float(scores[i]),
+                position=self._position.get((sentences[i].source_doc, sentences[i].content)),
+            )
+            for i in kept
+        ]
 
     def split(self, chunks: Sequence[TextSegment]) -> list[TextSegment]:
         """Split chunks into sentences, dropping repeats from chunk overlap.
