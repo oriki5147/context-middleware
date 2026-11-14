@@ -5,6 +5,9 @@
     python -m evaluation report-raw --split dev [--tag T]
     python -m evaluation rescore-raw --split dev --reranker DIR --tag T [--context] [--source-tag S] [--second]
     python -m evaluation rank-judge --split dev [--limit N] [--models haiku,sonnet] [--confirm]
+    python -m evaluation llm        --split dev [--tag T] [--models haiku] [--conditions a,b] [--confirm]
+    python -m evaluation llm-judge  --split dev [--tag T] [--models haiku] [--judge haiku] [--confirm]
+    python -m evaluation llm-paired --split dev [--tag T] [--b-tag U] --contrast a,b [--contrast c,d]
 
 ``build`` runs the models once (slow) and caches candidates to data/eval/;
 ``report`` sweeps selection rules over the cache (fast) and writes CSVs.
@@ -18,6 +21,7 @@ import argparse
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -29,6 +33,9 @@ OUT = Path("data/eval")
 MODEL = Path("models/bge-small-en-v1.5")
 RERANKER = Path("models/ms-marco-MiniLM-L6-v2")
 READER = Path("models/tinyroberta-squad2")
+# Claude counts about 1.4 tokens for every 4 characters of these prompts
+# (measured on 2,300 cached Haiku requests); cost estimates use it.
+CLAUDE_TOKEN_RATIO = 1.4
 
 _BI_SENTENCE = [round(float(t), 3) for t in np.arange(0.55, 0.851, 0.025)]
 _RERANK_SENTENCE = [0.001, 0.003, 0.01, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9]
@@ -49,7 +56,7 @@ EMPTY_THRESHOLDS = {s: _GRIDS[s.rstrip("0123456789")][1] for s in sweep.SCORERS}
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "command", choices=["build", "report", "build-raw", "report-raw", "experiments", "llm", "llm-report", "rescore-raw", "rank-judge"]
+        "command", choices=["build", "report", "build-raw", "report-raw", "experiments", "llm", "llm-report", "llm-judge", "llm-paired", "rescore-raw", "rank-judge"]
     )
     parser.add_argument("--models", default="haiku,sonnet,qwen", help="llm: comma-separated")
     parser.add_argument("--qwen-model", default="qwen3.5:4b", help="llm: Ollama model tag")
@@ -57,6 +64,9 @@ def main() -> None:
     parser.add_argument("--offset", type=int, default=0, help="llm: skip the first N questions of each kind")
     parser.add_argument("--conditions", default="", help="llm: comma-separated subset of conditions")
     parser.add_argument("--confirm", action="store_true", help="llm: actually send (default: dry run)")
+    parser.add_argument("--judge", default="haiku", help="llm-judge, llm-paired: the grading model")
+    parser.add_argument("--contrast", action="append", default=[], help="llm-paired: 'a,b' conditions (a from --tag, b from --b-tag)")
+    parser.add_argument("--b-tag", default=None, help="llm-paired: raw cache tag of the second condition (default: --tag)")
     parser.add_argument("--split", choices=["dev", "test"], default="dev")
     parser.add_argument("--limit", type=int, default=None, help="answerable questions")
     parser.add_argument("--negatives", type=int, default=None, help="per negative kind")
@@ -99,6 +109,11 @@ def main() -> None:
         run_rank_judge(args, raw.load(raw_cache), OUT / "llm" / name)
     elif args.command in ("llm", "llm-report"):
         run_llm(args, raw.load(raw_cache), OUT / "llm" / name)
+    elif args.command == "llm-judge":
+        run_llm_judge(args, raw.load(raw_cache), OUT / "llm" / name)
+    elif args.command == "llm-paired":
+        b_name = name if args.b_tag is None else args.split + (f"_{args.b_tag}" if args.b_tag else "")
+        run_llm_paired(args, name, b_name)
     elif args.command == "experiments":
         run_experiments(raw.load(raw_cache), OUT / "results" / f"{name}_experiments")
     elif args.command == "report-raw":
@@ -192,7 +207,7 @@ def run_llm(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path
         if args.command == "llm":
             prices = (0.0, 0.0) if model == "qwen" else llm_clients.CLAUDE_MODELS[model].price_per_mtok
             pending = [t for t in tasks if t.task_id not in cache.done][: args.max_requests]
-            tokens_in = sum(llm_eval.estimate_tokens(t.prompt) for t in pending)
+            tokens_in = int(CLAUDE_TOKEN_RATIO * sum(llm_eval.estimate_tokens(t.prompt) for t in pending))
             cost = (tokens_in * prices[0] + 20 * len(pending) * prices[1]) / 1e6
             print(f"\n[{model}] {len(pending)} to send, ~{tokens_in:,} input tokens, est. ${cost:.2f}")
             if not args.confirm:
@@ -219,6 +234,73 @@ def run_llm(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path
             sweep.write_csv(rows, out / f"{model}_report.csv")
     if args.command == "llm" and not args.confirm:
         print("\nDry run only: nothing was sent. Add --confirm to send.")
+
+
+def _llm_tasks(args: argparse.Namespace, raws: Sequence[raw.RawQuestion]) -> list[Any]:
+    from . import llm_eval
+
+    only = [c for c in args.conditions.split(",") if c] or None
+    return llm_eval.build_tasks(raws, args.limit or 100, args.negatives or 50, offset=args.offset, only=only)
+
+
+def run_llm_judge(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path) -> None:
+    """Grade the cached answers of each model with the judge (dry run unless --confirm)."""
+    from . import judge, llm_clients, llm_eval
+
+    tasks = _llm_tasks(args, raws)
+    prices = llm_clients.CLAUDE_MODELS[args.judge].price_per_mtok
+    for model in args.models.split(","):
+        answers = llm_eval.ResponseCache(out / f"{model}.jsonl")
+        graded = llm_eval.ResponseCache(out / f"{model}_judge_{args.judge}.jsonl")
+        grading = judge.judge_tasks(tasks, answers)
+        pending = [t for t in grading if t.task_id not in graded.done][: args.max_requests]
+        tokens_in = int(CLAUDE_TOKEN_RATIO * sum(llm_eval.estimate_tokens(t.prompt) for t in pending))
+        cost = (tokens_in * prices[0] + 5 * len(pending) * prices[1]) / 1e6
+        answered = sum(t.task_id in answers.done for t in tasks)
+        print(
+            f"\n[{model}] {answered} answers, {answered - len(grading)} settled without the judge, "
+            f"{len(pending)} to grade, ~{tokens_in:,} input tokens, est. ${cost:.2f}"
+        )
+        if args.confirm and pending:
+            failures = llm_eval.run(grading, llm_clients.ClaudeClient(args.judge, max_tokens=16), graded, args.max_requests)
+            print(f"[{model}] done, {failures} failures (not cached; rerun to retry)")
+        rows = judge.summary(tasks, answers, judge.verdicts(tasks, answers, graded))
+        if rows:
+            print(f"{'kind/condition':30} {'n':>5} {'correct':>8} {'abstain':>8} {'wrong':>7} {'in.tok':>7}")
+            for r in rows:
+                print(
+                    f"{r.kind + '/' + r.condition:30} {r.n:5d} {r.correct:8.1%} {r.abstain:8.1%} "
+                    f"{r.wrong:7.1%} {r.mean_input_tokens:7.0f}"
+                )
+            sweep.write_csv(rows, out / f"{model}_judged.csv")
+    if not args.confirm:
+        print("\nDry run only: nothing was sent. Add --confirm to send.")
+
+
+def run_llm_paired(args: argparse.Namespace, a_name: str, b_name: str) -> None:
+    """Judge-graded accuracy of condition a (from --tag) against b (from --b-tag), paired by question."""
+    from . import judge, llm_eval
+
+    def graded(name: str, model: str) -> dict[str, str]:
+        out = OUT / "llm" / name
+        tasks = _llm_tasks(args, raw.load(OUT / f"{name}_raw.pkl"))
+        return judge.verdicts(
+            tasks, llm_eval.ResponseCache(out / f"{model}.jsonl"),
+            llm_eval.ResponseCache(out / f"{model}_judge_{args.judge}.jsonl"),
+        )
+
+    for model in args.models.split(","):
+        first = graded(a_name, model)
+        second = first if b_name == a_name else graded(b_name, model)
+        print(f"\n== {model}: {a_name} vs {b_name} ==")
+        print(f"{'a':16} {'b':16} {'stratum':8} {'n':>5} {'acc a':>6} {'acc b':>6} {'a-b':>6} {'95% interval':>15} {'W/L':>9} {'p':>6}")
+        for contrast in args.contrast:
+            a, b = contrast.split(",")
+            for r in judge.compare(a, b, first, second, first):
+                print(
+                    f"{r.a:16} {r.b:16} {r.stratum:8} {r.n:5d} {r.accuracy_a:6.1%} {r.accuracy_b:6.1%} "
+                    f"{r.difference:+6.1%} [{r.ci_low:+6.1%},{r.ci_high:+6.1%}] {r.wins:4d}/{r.losses:<4d} {r.p_value:6.3f}"
+                )
 
 
 def run_rank_judge(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path) -> None:

@@ -9,7 +9,7 @@ the production selection rules and defaults):
   mw_rerank      middleware, reranker over the bi top-20, best 3 sentences
   mw_rerank_nb   mw_rerank plus each sentence's document neighbors
   mw_rerank_k5/7 mw_rerank keeping the best 5 / 7 sentences (less compression)
-  mw_rerank*_t   mw_rerank / _nb / _k7 laid out like retrieval results: sentences
+  mw_rerank*_t   mw_rerank / _nb / _k5 / _k7 laid out like retrieval results: sentences
                  grouped by document under its title, in document order
   rag_eq_k3/5/7  plain retrieval cut to the token count of the best 3 / 5 / 7
                  sentences: what "just retrieve fewer chunks" gives for the
@@ -74,11 +74,11 @@ ANSWERABLE_CONDITIONS = (
     "closed_book", "oracle", "rag", "mw_bi", "mw_rerank", "mw_rerank_nb", "counterfactual",
     "mw_rerank_k5", "mw_rerank_k7", "rag_open", "mw_rerank_open", "mw_rerank_k7_open",
     "rag_eq_k3", "rag_eq_k5", "rag_eq_k7",
-    "mw_rerank_t", "mw_rerank_nb_t", "mw_rerank_k7_t",
+    "mw_rerank_t", "mw_rerank_nb_t", "mw_rerank_k7_t", "mw_rerank_k5_t",
 )
 NEGATIVE_CONDITIONS = (
     "closed_book", "rag", "mw_rerank", "mw_rerank_k7", "rag_open", "mw_rerank_open", "mw_rerank_k7_open",
-    "mw_rerank_nb",
+    "mw_rerank_nb", "mw_rerank_k5_t", "mw_rerank_k7_t",
 )
 
 
