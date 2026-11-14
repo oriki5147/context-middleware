@@ -66,6 +66,7 @@ def main() -> None:
     parser.add_argument("--confirm", action="store_true", help="llm: actually send (default: dry run)")
     parser.add_argument("--judge", default="haiku", help="llm-judge, llm-paired: the grading model")
     parser.add_argument("--contrast", action="append", default=[], help="llm-paired: 'a,b' conditions (a from --tag, b from --b-tag)")
+    parser.add_argument("--shortlist", type=int, default=None, help="llm*: sentences the reranker sees (default: production); answers go to <name>_sl<N>")
     parser.add_argument("--b-tag", default=None, help="llm-paired: raw cache tag of the second condition (default: --tag)")
     parser.add_argument("--split", choices=["dev", "test"], default="dev")
     parser.add_argument("--limit", type=int, default=None, help="answerable questions")
@@ -108,9 +109,9 @@ def main() -> None:
     elif args.command == "rank-judge":
         run_rank_judge(args, raw.load(raw_cache), OUT / "llm" / name)
     elif args.command in ("llm", "llm-report"):
-        run_llm(args, raw.load(raw_cache), OUT / "llm" / name)
+        run_llm(args, raw.load(raw_cache), _llm_dir(name, args.shortlist))
     elif args.command == "llm-judge":
-        run_llm_judge(args, raw.load(raw_cache), OUT / "llm" / name)
+        run_llm_judge(args, raw.load(raw_cache), _llm_dir(name, args.shortlist))
     elif args.command == "llm-paired":
         b_name = name if args.b_tag is None else args.split + (f"_{args.b_tag}" if args.b_tag else "")
         run_llm_paired(args, name, b_name)
@@ -190,8 +191,7 @@ def report(records: Sequence[candidates.QuestionRecord], out: Path) -> None:
 def run_llm(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path) -> None:
     from . import llm_clients, llm_eval
 
-    only = [c for c in args.conditions.split(",") if c] or None
-    tasks = llm_eval.build_tasks(raws, args.limit or 100, args.negatives or 50, offset=args.offset, only=only)
+    tasks = _llm_tasks(args, raws, args.shortlist)
     per_condition: dict[str, int] = {}
     for t in tasks:
         per_condition[f"{t.kind}/{t.condition}"] = per_condition.get(f"{t.kind}/{t.condition}", 0) + 1
@@ -236,18 +236,24 @@ def run_llm(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path
         print("\nDry run only: nothing was sent. Add --confirm to send.")
 
 
-def _llm_tasks(args: argparse.Namespace, raws: Sequence[raw.RawQuestion]) -> list[Any]:
+def _llm_dir(name: str, shortlist: int | None) -> Path:
+    """Where a raw cache's answers live; a non-default reranker shortlist gets its own directory."""
+    return OUT / "llm" / (name if shortlist is None else f"{name}_sl{shortlist}")
+
+
+def _llm_tasks(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], shortlist: int | None) -> list[Any]:
     from . import llm_eval
 
     only = [c for c in args.conditions.split(",") if c] or None
-    return llm_eval.build_tasks(raws, args.limit or 100, args.negatives or 50, offset=args.offset, only=only)
+    config = MiddlewareConfig() if shortlist is None else replace(MiddlewareConfig(), rerank_top_n=shortlist)
+    return llm_eval.build_tasks(raws, args.limit or 100, args.negatives or 50, config, offset=args.offset, only=only)
 
 
 def run_llm_judge(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out: Path) -> None:
     """Grade the cached answers of each model with the judge (dry run unless --confirm)."""
     from . import judge, llm_clients, llm_eval
 
-    tasks = _llm_tasks(args, raws)
+    tasks = _llm_tasks(args, raws, args.shortlist)
     prices = llm_clients.CLAUDE_MODELS[args.judge].price_per_mtok
     for model in args.models.split(","):
         answers = llm_eval.ResponseCache(out / f"{model}.jsonl")
@@ -278,25 +284,25 @@ def run_llm_judge(args: argparse.Namespace, raws: Sequence[raw.RawQuestion], out
 
 
 def run_llm_paired(args: argparse.Namespace, a_name: str, b_name: str) -> None:
-    """Judge-graded accuracy of condition a (from --tag) against b (from --b-tag), paired by question."""
+    """Judge-graded accuracy of condition a (from --tag, with --shortlist) against b (from --b-tag), paired by question."""
     from . import judge, llm_eval
 
-    def graded(name: str, model: str) -> dict[str, str]:
-        out = OUT / "llm" / name
-        tasks = _llm_tasks(args, raw.load(OUT / f"{name}_raw.pkl"))
+    def graded(name: str, model: str, shortlist: int | None) -> dict[str, str]:
+        out = _llm_dir(name, shortlist)
+        tasks = _llm_tasks(args, raw.load(OUT / f"{name}_raw.pkl"), shortlist)
         return judge.verdicts(
             tasks, llm_eval.ResponseCache(out / f"{model}.jsonl"),
             llm_eval.ResponseCache(out / f"{model}_judge_{args.judge}.jsonl"),
         )
 
     for model in args.models.split(","):
-        first = graded(a_name, model)
-        second = first if b_name == a_name else graded(b_name, model)
+        first = graded(a_name, model, args.shortlist)
+        second = first if b_name == a_name and args.shortlist is None else graded(b_name, model, None)
         print(f"\n== {model}: {a_name} vs {b_name} ==")
         print(f"{'a':16} {'b':16} {'stratum':8} {'n':>5} {'acc a':>6} {'acc b':>6} {'a-b':>6} {'95% interval':>15} {'W/L':>9} {'p':>6}")
         for contrast in args.contrast:
             a, b = contrast.split(",")
-            for r in judge.compare(a, b, first, second, first):
+            for r in judge.compare(a, b, first, second, {**second, **first}):
                 print(
                     f"{r.a:16} {r.b:16} {r.stratum:8} {r.n:5d} {r.accuracy_a:6.1%} {r.accuracy_b:6.1%} "
                     f"{r.difference:+6.1%} [{r.ci_low:+6.1%},{r.ci_high:+6.1%}] {r.wins:4d}/{r.losses:<4d} {r.p_value:6.3f}"
