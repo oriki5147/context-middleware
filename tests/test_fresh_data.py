@@ -4,7 +4,17 @@ from pathlib import Path
 
 import numpy as np
 
-from evaluation.fresh_data import Lexical, build_examples, load, parse_written, passages, save, write_tasks
+from evaluation.fresh_data import (
+    Lexical,
+    apply_rewrites,
+    build_examples,
+    load,
+    parse_written,
+    passages,
+    rewrite_tasks,
+    save,
+    write_tasks,
+)
 
 
 def sentence(tag: str, n: int) -> str:
@@ -87,3 +97,23 @@ def test_build_examples_adds_the_closest_passages_without_the_answer(tmp_path: P
 
     save([example], tmp_path / "q.jsonl")
     assert load(tmp_path / "q.jsonl") == [example]
+
+
+def test_rewrites_replace_the_question_and_drop_the_ones_that_break_the_rules() -> None:
+    articles = [{"title": "Storm Adam", "text": f"Storm Adam was named by Aemet. {sentence('pad', 45)}"}]
+    (task,) = write_tasks(articles, per_article=1)
+    written = [(task, '{"question": "Which agency named Storm Adam in 2026?", "answer": "Aemet"}')]
+    (rewrite,) = rewrite_tasks(written)
+    assert rewrite.task_id == "re" + task.task_id and rewrite.answers == ("Aemet",)
+    assert "Which agency named Storm Adam in 2026?" in rewrite.prompt and task.context in rewrite.prompt
+    assert rewrite_tasks([(task, "SKIP")]) == []
+
+    def applied(reply: str) -> list[tuple[str, str]]:
+        return [(t.task_id, text) for t, text in apply_rewrites(written, {rewrite.task_id: reply})]
+
+    good = applied('Sure: {"question": "Who gave Storm Adam its name?"}')
+    assert good == [(task.task_id, '{"question": "Who gave Storm Adam its name?", "answer": "Aemet"}')]
+    assert parse_written(good[0][1], task.context) == ("Who gave Storm Adam its name?", "Aemet")
+    assert applied('{"question": "Did Aemet give Storm Adam its name?"}') == []  # leaks the answer
+    assert applied("no json") == []
+    assert apply_rewrites(written, {}) == []
