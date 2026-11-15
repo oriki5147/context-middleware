@@ -85,7 +85,7 @@ class SelectiveSentenceCompressor:
         sentence_threshold: float | None = None,
         empty_threshold: float = 0.64,
         min_sentences: int = 1,
-        max_sentences: int | None = 3,
+        max_sentences: int | None = 5,
         sentence_splitter: SentenceSplitter | None = None,
         reranker: Reranker | None = None,
         rerank_top_n: int = 20,

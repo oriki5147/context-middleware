@@ -31,7 +31,7 @@ def test_empty_result_rejects_content() -> None:
 def test_config_defaults_follow_evaluation() -> None:
     config = MiddlewareConfig()
     assert (config.chunk_size_tokens, config.chunk_overlap_tokens) == (64, 0)
-    assert (config.max_sentences, config.sentence_threshold) == (3, None)
+    assert (config.max_sentences, config.sentence_threshold) == (5, None)
 
 
 @pytest.mark.parametrize(

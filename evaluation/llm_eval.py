@@ -1,7 +1,7 @@
 """Level 2: does the compressed context let a real LLM answer correctly?
 
 Conditions per answerable question (prompts built from the raw cache with
-the production selection rules and defaults):
+the production selection rules; the sentence cap is set per condition):
   closed_book    no context: what the model already knows
   oracle         the gold passage only: the ceiling
   rag            uncompressed retrieval (~1,200 tokens): today's alternative
@@ -66,6 +66,9 @@ OPEN_PROMPT = (
 CLOSED_BOOK_PROMPT = "Answer the question with a short phrase.\n\nQuestion: {question}\nAnswer:"
 NO_RESULTS = "(no search results)"
 OPEN_SUFFIX = "_open"
+# mw_bi / mw_rerank keep this many sentences whatever the product default is,
+# so a condition name always means the same context.
+BASE_SENTENCES = 3
 MORE_SENTENCES = {"mw_rerank_k5": 5, "mw_rerank_k7": 7}
 TITLED_SUFFIX = "_t"
 EQUAL_BUDGET = {"rag_eq_k3": 3, "rag_eq_k5": 5, "rag_eq_k7": 7}
@@ -145,11 +148,12 @@ def contexts(raw: RawQuestion, config: MiddlewareConfig) -> dict[str, str]:
             f"Document [{n}](Title: {raw.chunk_title[c]}) {raw.chunk_text[c]}" for n, c in enumerate(chunks, 1)
         )
 
+    base = replace(config, max_sentences=BASE_SENTENCES)
     out = {
         "rag": documents(retrieved),
-        "mw_bi": "\n".join(raw.sent_text[i] for i in _middleware_sentences(raw, False, config)),
+        "mw_bi": "\n".join(raw.sent_text[i] for i in _middleware_sentences(raw, False, base)),
     }
-    rerank = _middleware_sentences(raw, True, config)
+    rerank = _middleware_sentences(raw, True, base)
     chosen = {"mw_rerank": rerank, "mw_rerank_nb": _with_neighbors(raw, rerank)}
     for condition, k in MORE_SENTENCES.items():
         chosen[condition] = _middleware_sentences(raw, True, replace(config, max_sentences=k))

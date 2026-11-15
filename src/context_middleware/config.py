@@ -32,8 +32,11 @@ class MiddlewareConfig:
     # Phase 3: selection is driven by the cap: keep the best max_sentences.
     # sentence_threshold (optional) additionally drops sentences below it,
     # down to min_sentences. Evaluation showed caps, not thresholds, set the
-    # compression/answer trade-off.
-    max_sentences: int | None = 3
+    # compression/answer trade-off. On the held-out NQ half (Haiku reader), 5
+    # sentences (~440 tokens, 18% of the retrieved text) give 65.7% correct
+    # answers and 3 give 61.7%; full retrieval gives 70.8%. With the second
+    # reranker 3 sentences reach 65.1%, so lower the cap to 3 when it is on.
+    max_sentences: int | None = 5
     sentence_threshold: float | None = None
     min_sentences: int = 1
     # Empty context when even the best sentence's bi-encoder score is

@@ -58,9 +58,10 @@ def test_keeps_sentences_above_threshold_best_first() -> None:
 
 
 def test_default_selection_is_cap_driven() -> None:
-    # Production defaults: no sentence threshold, keep the best 3.
+    # Production defaults: no sentence threshold, keep the best 5 (here all 4, best first).
     compressor = SelectiveSentenceCompressor(FakeEncoder(SCORES), sentence_splitter=period_splitter)
-    assert [s.content for s in compressor.compress(Q, CHUNKS)] == ["A.", "B.", "C."]
+    assert (compressor.max_sentences, compressor.sentence_threshold) == (5, None)
+    assert [s.content for s in compressor.compress(Q, CHUNKS)] == ["A.", "B.", "C.", "D."]
 
 
 def test_default_empty_threshold_applies() -> None:
@@ -89,7 +90,7 @@ def test_max_sentences_caps_output() -> None:
 
 def test_overlap_duplicates_scored_once_first_occurrence_wins() -> None:
     encoder = FakeEncoder(SCORES)
-    compressor = SelectiveSentenceCompressor(encoder, sentence_splitter=period_splitter)
+    compressor = SelectiveSentenceCompressor(encoder, sentence_splitter=period_splitter, max_sentences=3)
     overlapping = [chunk("doc#1", "B. A."), chunk("doc#0", "A. C."), chunk("x#0", "A.", "other")]
 
     kept = compressor.compress(Q, overlapping)
@@ -222,7 +223,7 @@ def test_reranker_requires_query_text() -> None:
 
 def test_precompute_moves_embedding_out_of_the_query_path() -> None:
     encoder = FakeEncoder(SCORES)
-    compressor = SelectiveSentenceCompressor(encoder, sentence_splitter=period_splitter)
+    compressor = SelectiveSentenceCompressor(encoder, sentence_splitter=period_splitter, max_sentences=3)
     compressor.precompute(CHUNKS)
     embedded_at_ingest = len(encoder.embedded)
     assert embedded_at_ingest == 4
@@ -230,7 +231,7 @@ def test_precompute_moves_embedding_out_of_the_query_path() -> None:
     kept = compressor.compress(Q, CHUNKS)
 
     assert len(encoder.embedded) == embedded_at_ingest  # nothing encoded at query time
-    cold = SelectiveSentenceCompressor(FakeEncoder(SCORES), sentence_splitter=period_splitter)
+    cold = SelectiveSentenceCompressor(FakeEncoder(SCORES), sentence_splitter=period_splitter, max_sentences=3)
     # Identical results with or without the cache, except that only ingested
     # sentences know their position in the document (C. A. D. B.).
     assert [replace(s, position=None) for s in kept] == cold.compress(Q, CHUNKS)
