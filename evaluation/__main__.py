@@ -68,7 +68,7 @@ def main() -> None:
     parser.add_argument("--contrast", action="append", default=[], help="llm-paired: 'a,b' conditions (a from --tag, b from --b-tag)")
     parser.add_argument("--shortlist", type=int, default=None, help="llm*: sentences the reranker sees (default: production); answers go to <name>_sl<N>")
     parser.add_argument("--b-tag", default=None, help="llm-paired: raw cache tag of the second condition (default: --tag)")
-    parser.add_argument("--split", choices=["dev", "test", "fresh"], default="dev", help="NQ dev / test halves, or the fresh-events set (fresh_data)")
+    parser.add_argument("--split", choices=["dev", "test", "fresh", "trivia"], default="dev", help="NQ dev / test halves, the fresh-events set (fresh_data) or TriviaQA (trivia_data)")
     parser.add_argument("--limit", type=int, default=None, help="answerable questions")
     parser.add_argument("--negatives", type=int, default=None, help="per negative kind")
     parser.add_argument("--configs", nargs="*", default=None, help="chunk config names")
@@ -87,6 +87,10 @@ def main() -> None:
             from . import fresh_data
 
             examples = fresh_data.load()[: args.limit]
+        elif args.split == "trivia":
+            from . import trivia_data
+
+            examples = trivia_data.load()[: args.limit]
         else:
             dev, test = nq_data.split(nq_data.load())
             examples = (dev if args.split == "dev" else test)[: args.limit]
