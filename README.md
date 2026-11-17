@@ -71,7 +71,7 @@ pip install -e ".[ingest]"       # runtime: numpy, onnxruntime, tokenizers, pysb
 pip install -e ".[dev]" && pytest
 ```
 
-**Model weights are not in this repository.** The bi-encoder is the public `BAAI/bge-small-en-v1.5` ONNX file, converted to INT8 with `python -m context_middleware.quantization`. The distilled reranker is not published yet; `evaluation/distill.py` and `evaluation/train_distill.py` reproduce it (about $2.40 of Haiku labels and 5.5 hours on a CPU). Any ONNX cross-encoder works in its place with `rerank_context=False`.
+**Model weights are not in this repository.** The bi-encoder is the public `BAAI/bge-small-en-v1.5` ONNX file, converted to INT8 with `python -m context_middleware.quantization`. The distilled reranker is published on Hugging Face as [Ori5147/context-reranker-MiniLM-L6](https://huggingface.co/Ori5147/context-reranker-MiniLM-L6); download it into `models/distill-big-context-MiniLM-L6`. To retrain it, `evaluation/distill.py` and `evaluation/train_distill.py` reproduce it (about $2.40 of Haiku labels and 5.5 hours on a CPU). Any other ONNX cross-encoder works in its place with `rerank_context=False`.
 
 ## How it was measured
 

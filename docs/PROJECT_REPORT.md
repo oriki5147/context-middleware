@@ -37,6 +37,8 @@ The spec also listed parameter values: 100 to 120-token chunks with 25% overlap,
 
 An optional second reranker (fine-tuned Ettin, 68M parameters) rescores the best 8 sentences.
 
+The trained reranker is published at [huggingface.co/Ori5147/context-reranker-MiniLM-L6](https://huggingface.co/Ori5147/context-reranker-MiniLM-L6).
+
 ## 3. Challenges, and what was done about each
 
 ### 3.1 The first end-to-end run was poor, for two different reasons
@@ -223,8 +225,7 @@ In order of evidence and cost:
 1. **Fallback to the full context when the reader abstains.** Computed from the existing answer logs, with no new model calls: if the reader says the compressed context lacks the answer, ask again with the full context. This matches full-context accuracy (71.3% against 70.9% on the held-out half) at an average of 774 tokens, with a second call on 14% of queries. It also raises wrong answers by 1 to 2.4 points, and by 6 to 8 points on questions with no answer in the passages. It is an after-the-fact analysis and needs confirmation on fresh questions.
 2. **Longer contexts.** All measurements used about 2,500 tokens. The case for compression should be stronger at 10 to 50 times that, and it has not been tested.
 3. **Head-to-head comparison** with a commercial pruning API and an open-source pruner on the same questions.
-4. **Publishing the reranker weights**, so the library runs as measured without retraining.
-5. **Document extraction.** Poor PDF text was the first failure seen and remains outside what was evaluated.
+4. **Document extraction.** Poor PDF text was the first failure seen and remains outside what was evaluated.
 
 ## 7. Cost and tools
 
