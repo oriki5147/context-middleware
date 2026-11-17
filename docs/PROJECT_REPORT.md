@@ -172,7 +172,25 @@ The reader scores higher with no context than with any context here. It knows mo
 
 Compression neither causes nor reduces this. The empty-context rule catches off-topic questions (398 of 400) and not on-topic ones.
 
-### 4.4 Speed
+### 4.4 A small local reader
+
+The same questions as the development half, with a local 4B model (Qwen 3.5, run through Ollama) as the reader and Haiku as the judge. Published work suggested compression helps weak readers most, so this was a test of whether the gap to the full context would close.
+
+| Context | Tokens | Correct |
+|---|---:|---:|
+| No context | 36 | 29.8% |
+| Full retrieved context | 1,683 | 65.8% |
+| Plain retrieval, same budget: 3 / 5 / 7 | 177 / 262 / 348 | 44.1 / 50.0 / 54.0% |
+| Compressed: 3 / 5 / 7 sentences | 217 / 308 / 395 | 57.6 / 58.9 / 61.0% |
+
+| Comparison | 3 sentences | 5 sentences | 7 sentences |
+|---|---:|---:|---:|
+| Compressed minus plain retrieval at equal budget | +13.6 [10.7, 16.4] | +8.9 [6.3, 11.5] | +7.0 [4.5, 9.5] |
+| Compressed minus full context | −8.2 | −6.9 [−9.4, −4.4] | −4.7 [−7.1, −2.4] |
+
+The gap did not close. It is somewhat larger than with Haiku on the same questions (−4.4 and −2.9 at 5 and 7 sentences). The win over equal-budget retrieval is the same size as with Haiku. What does change is how much any context is worth: this reader goes from 30% with no context to 61% with 395 tokens of compressed context.
+
+### 4.5 Speed
 
 Laptop CPU with 20 logical cores, INT8 ONNX models, 20 passages per question:
 
@@ -183,7 +201,7 @@ Laptop CPU with 20 logical cores, INT8 ONNX models, 20 passages per question:
 | Whole selection step, median | about 55 ms |
 | With the second reranker | roughly 20 to 40 ms more |
 
-### 4.5 Where the remaining gap comes from
+### 4.6 Where the remaining gap comes from
 
 When the answer reaches the reader, the compressed context does better than the full one (81.5% against 77.8% correct on the development half). The whole deficit comes from answers lost before the reader: sentences that were retrieved but did not make the shortlist of 20, and sentences in the shortlist that were not chosen. Matching the full context would need the answer sentence to arrive for roughly 79% of questions; it arrives for 69%.
 
@@ -193,7 +211,7 @@ A review in November 2026 of published papers and commercial products found:
 
 - No one reports full-context accuracy at about 80% compression on single-fact questions with a strong reader. Vendor figures for a comparable commercial feature released in October 2026 show a loss of about 7 points at 75% of the context removed. Published extractive pruners report losses of 1 to 2 points, measured with different readers and metrics.
 - No published CPU-budget method promises more than a few points of improvement on this kind of data.
-- Published evidence does show compression helping accuracy in settings this project has not measured: small local reader models, contexts of tens of thousands of tokens, and retrieval with many misleading passages.
+- Published evidence does show compression helping accuracy in three settings: small local reader models, contexts of tens of thousands of tokens, and retrieval with many misleading passages. This project tested the first and did not see it (section 4.4). The other two have not been measured here.
 - The equal-budget comparison and CPU latency figures reported here are not commonly published by others.
 
 These numbers come from different datasets and readers and are not directly comparable with each other or with this project. A head-to-head run on the same questions has not been done.
@@ -202,12 +220,11 @@ These numbers come from different datasets and readers and are not directly comp
 
 In order of evidence and cost:
 
-1. **Small local readers.** The literature suggests compression helps weaker readers most. A full run with a local 4B model on the same questions is in progress.
-2. **Fallback to the full context when the reader abstains.** Computed from the existing answer logs, with no new model calls: if the reader says the compressed context lacks the answer, ask again with the full context. This matches full-context accuracy (71.3% against 70.9% on the held-out half) at an average of 774 tokens, with a second call on 14% of queries. It also raises wrong answers by 1 to 2.4 points, and by 6 to 8 points on questions with no answer in the passages. It is an after-the-fact analysis and needs confirmation on fresh questions.
-3. **Longer contexts.** All measurements used about 2,500 tokens. The case for compression should be stronger at 10 to 50 times that, and it has not been tested.
-4. **Head-to-head comparison** with a commercial pruning API and an open-source pruner on the same questions.
-5. **Publishing the reranker weights**, so the library runs as measured without retraining.
-6. **Document extraction.** Poor PDF text was the first failure seen and remains outside what was evaluated.
+1. **Fallback to the full context when the reader abstains.** Computed from the existing answer logs, with no new model calls: if the reader says the compressed context lacks the answer, ask again with the full context. This matches full-context accuracy (71.3% against 70.9% on the held-out half) at an average of 774 tokens, with a second call on 14% of queries. It also raises wrong answers by 1 to 2.4 points, and by 6 to 8 points on questions with no answer in the passages. It is an after-the-fact analysis and needs confirmation on fresh questions.
+2. **Longer contexts.** All measurements used about 2,500 tokens. The case for compression should be stronger at 10 to 50 times that, and it has not been tested.
+3. **Head-to-head comparison** with a commercial pruning API and an open-source pruner on the same questions.
+4. **Publishing the reranker weights**, so the library runs as measured without retraining.
+5. **Document extraction.** Poor PDF text was the first failure seen and remains outside what was evaluated.
 
 ## 7. Cost and tools
 

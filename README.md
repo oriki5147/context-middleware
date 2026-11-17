@@ -18,6 +18,7 @@ Measured once on a held-out half of Natural Questions (1,327 questions, 20 passa
 
 - **Against plain retrieval at the same token budget, compression wins by 7 to 13 points.** The 95% intervals exclude zero at every budget tested, and the same pattern holds on TriviaQA, a second set that nothing was tuned on (+4 to +13).
 - **Against the full context, it loses 4 to 5 points while sending 82% fewer tokens.** It does not match full-context accuracy, and no published compressor I found does at this compression level on this kind of question.
+- **A small local reader gives the same picture.** With a 4B model run locally as the reader, compression beats equal-budget retrieval by 7 to 14 points and loses 5 to 7 to the full context.
 - **Selection takes about 55 ms per query on a laptop CPU** (median, 20 passages, INT8 ONNX models).
 
 The full account, including the experiments that failed, is in [docs/PROJECT_REPORT.md](docs/PROJECT_REPORT.md).
