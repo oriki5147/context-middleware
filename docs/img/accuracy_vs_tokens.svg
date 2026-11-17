@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 430" width="760" height="430" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Answer accuracy against context size, Natural Questions held-out half</title>
+  <desc id="d">Compressed context reaches 61.7, 65.7 and 66.6 percent correct at 306, 440 and 566 tokens. Plain retrieval at the same budgets reaches 48.8, 57.5 and 59.8 percent. The full retrieved context reaches 70.8 percent at 2,463 tokens. With no context the reader model scores 61.5 percent.</desc>
+  <rect width="760" height="430" rx="10" fill="#fcfcfb"/>
+
+  <text x="24" y="32" font-size="16" font-weight="600" fill="#0b0b0b">Correct answers vs. context size</text>
+  <text x="24" y="52" font-size="12" fill="#52514e">Natural Questions, held-out half (1,327 questions) · reader and judge: Claude Haiku</text>
+
+  <!-- legend -->
+  <g font-size="12" fill="#0b0b0b">
+    <line x1="24" y1="74" x2="44" y2="74" stroke="#2a78d6" stroke-width="2"/><circle cx="34" cy="74" r="4" fill="#2a78d6"/>
+    <text x="50" y="78">Compressed context (this project)</text>
+    <line x1="262" y1="74" x2="282" y2="74" stroke="#eb6834" stroke-width="2"/><rect x="268" y="70" width="8" height="8" fill="#eb6834"/>
+    <text x="288" y="78">Plain retrieval, same token budget</text>
+    <path d="M500 68 l6 6 -6 6 -6 -6z" fill="#0b0b0b"/>
+    <text x="512" y="78">Full retrieved context</text>
+  </g>
+
+  <!-- grid -->
+  <g stroke="#e6e5e0" stroke-width="1">
+    <line x1="70" y1="340.0" x2="720" y2="340.0"/>
+    <line x1="70" y1="297.1" x2="720" y2="297.1"/>
+    <line x1="70" y1="211.4" x2="720" y2="211.4"/>
+    <line x1="70" y1="125.7" x2="720" y2="125.7"/>
+  </g>
+  <g font-size="11" fill="#52514e" text-anchor="end">
+    <text x="62" y="301">50%</text>
+    <text x="62" y="215">60%</text>
+    <text x="62" y="130">70%</text>
+  </g>
+  <line x1="70" y1="340" x2="720" y2="340" stroke="#52514e" stroke-width="1"/>
+  <g font-size="11" fill="#52514e" text-anchor="middle">
+    <text x="70" y="358">0</text>
+    <text x="195" y="358">500</text>
+    <text x="320" y="358">1,000</text>
+    <text x="445" y="358">1,500</text>
+    <text x="570" y="358">2,000</text>
+    <text x="695" y="358">2,500</text>
+    <text x="395" y="382" font-size="12">Context tokens sent to the reader model</text>
+  </g>
+  <g stroke="#52514e" stroke-width="1">
+    <line x1="195" y1="340" x2="195" y2="344"/><line x1="320" y1="340" x2="320" y2="344"/>
+    <line x1="445" y1="340" x2="445" y2="344"/><line x1="570" y1="340" x2="570" y2="344"/>
+    <line x1="695" y1="340" x2="695" y2="344"/>
+  </g>
+
+  <!-- no-context reference -->
+  <line x1="70" y1="198.6" x2="720" y2="198.6" stroke="#52514e" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="716" y="192" font-size="11" fill="#52514e" text-anchor="end">No context (model's own memory): 61.5%</text>
+
+  <!-- plain retrieval, same budget -->
+  <polyline points="132,307.4 163.3,232.9 193.8,213.1" fill="none" stroke="#eb6834" stroke-width="2"/>
+  <g fill="#eb6834" stroke="#fcfcfb" stroke-width="2">
+    <rect x="127" y="302.4" width="10" height="10"/>
+    <rect x="158.3" y="227.9" width="10" height="10"/>
+    <rect x="188.8" y="208.1" width="10" height="10"/>
+  </g>
+  <text x="145" y="318" font-size="12" fill="#0b0b0b">48.8%</text>
+  <text x="208" y="232" font-size="12" fill="#0b0b0b">59.8%</text>
+
+  <!-- compressed -->
+  <polyline points="146.5,196.9 180,162.6 211.5,154.9" fill="none" stroke="#2a78d6" stroke-width="2"/>
+  <g fill="#2a78d6" stroke="#fcfcfb" stroke-width="2">
+    <circle cx="146.5" cy="196.9" r="5"/>
+    <circle cx="180" cy="162.6" r="5"/>
+    <circle cx="211.5" cy="154.9" r="5"/>
+  </g>
+  <text x="140" y="186" font-size="12" fill="#0b0b0b" text-anchor="end">61.7%</text>
+  <text x="224" y="152" font-size="12" fill="#0b0b0b">66.6% at 566 tokens</text>
+  <text x="180" y="146" font-size="12" fill="#0b0b0b" text-anchor="middle">65.7%</text>
+
+  <!-- full context -->
+  <path d="M685.8 111.9 l7 7 -7 7 -7 -7z" fill="#0b0b0b" stroke="#fcfcfb" stroke-width="2"/>
+  <text x="672" y="110" font-size="12" fill="#0b0b0b" text-anchor="end">70.8% at 2,463 tokens</text>
+
+  <text x="24" y="406" font-size="11" fill="#52514e">Points on each line: the best 3, 5 and 7 sentences (compressed), or plain retrieved chunks cut to the same budget.</text>
+  <text x="24" y="421" font-size="11" fill="#52514e">Run once, with the configuration frozen beforehand.</text>
+</svg>

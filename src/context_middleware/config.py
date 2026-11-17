@@ -1,7 +1,7 @@
 """Pipeline tunables.
 
 Defaults follow the NQ multi-document dev evaluation (see evaluation/), not the
-original illustrative values in Architecture.md.
+original illustrative values in docs/original-spec.md.
 """
 
 from __future__ import annotations

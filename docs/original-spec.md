@@ -1,3 +1,5 @@
+> **Note.** This is the design spec the project started from, kept for the record. The values in it were illustrative and most were replaced after measurement. The design as built is described in the [project report](PROJECT_REPORT.md).
+
 # High-Performance CPU-First Context Optimization Middleware
 
 ## 1. Executive Summary & Vision

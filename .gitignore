@@ -15,3 +15,7 @@ models/
 
 # Downloaded evaluation data and cached results.
 data/
+
+# Local working notes (Hebrew), not part of the published project.
+reports/
+research_notes/
